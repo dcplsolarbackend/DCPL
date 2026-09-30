@@ -1,5 +1,6 @@
-import React from 'react';
-import { Lead, PipelineStage } from '../types/crm';
+import React, { useMemo } from 'react';
+import type { Lead, PipelineStage, User } from '../types/crm';
+import { getVisibleStagesForRole } from '../constants/pipeline';
 import { 
   ArrowLeft, 
   ArrowRight, 
@@ -8,7 +9,7 @@ import {
   Calendar, 
   IndianRupee, 
   Edit3,
-  User
+  User as UserIcon
 } from 'lucide-react';
 
 interface KanbanBoardProps {
@@ -16,9 +17,10 @@ interface KanbanBoardProps {
   onUpdateStatus: (leadId: string, newStatus: PipelineStage) => void;
   onEditLead: (lead: Lead) => void;
   onOpenWhatsApp: (lead: Lead) => void;
+  currentUser?: User | null;
 }
 
-const KANBAN_STAGES: { id: PipelineStage; label: string; color: string }[] = [
+const ALL_KANBAN_STAGES: { id: PipelineStage; label: string; color: string }[] = [
   { id: 'New Leads', label: 'New Leads', color: 'border-t-amber-500' },
   { id: 'Follow Up', label: 'Follow Up', color: 'border-t-blue-500' },
   { id: 'Converted', label: 'Converted', color: 'border-t-emerald-500' },
@@ -41,23 +43,32 @@ export const KanbanBoard: React.FC<KanbanBoardProps> = ({
   onUpdateStatus,
   onEditLead,
   onOpenWhatsApp,
+  currentUser,
 }) => {
+  const visibleStageNames = useMemo(() => {
+    return getVisibleStagesForRole(currentUser?.role);
+  }, [currentUser?.role]);
+
+  const activeStages = useMemo(() => {
+    return ALL_KANBAN_STAGES.filter((s) => visibleStageNames.includes(s.id));
+  }, [visibleStageNames]);
+
   const todayStr = new Date().toISOString().split('T')[0];
 
-  const getStageIndex = (stage: PipelineStage) => KANBAN_STAGES.findIndex((s) => s.id === stage);
+  const getStageIndex = (stage: PipelineStage) => activeStages.findIndex((s) => s.id === stage);
 
   const moveStage = (lead: Lead, direction: 'prev' | 'next') => {
     const currentIndex = getStageIndex(lead.status);
     if (direction === 'prev' && currentIndex > 0) {
-      onUpdateStatus(lead.leadId, KANBAN_STAGES[currentIndex - 1].id);
-    } else if (direction === 'next' && currentIndex < KANBAN_STAGES.length - 1) {
-      onUpdateStatus(lead.leadId, KANBAN_STAGES[currentIndex + 1].id);
+      onUpdateStatus(lead.leadId, activeStages[currentIndex - 1].id);
+    } else if (direction === 'next' && currentIndex < activeStages.length - 1) {
+      onUpdateStatus(lead.leadId, activeStages[currentIndex + 1].id);
     }
   };
 
   return (
     <div className="flex gap-3 overflow-x-auto pb-6 items-start min-h-[calc(100vh-14rem)]">
-      {KANBAN_STAGES.map((stage, idx) => {
+      {activeStages.map((stage, idx) => {
         const stageLeads = leads.filter((l) => l.status === stage.id);
         const stageDues = stageLeads.reduce((acc, l) => acc + (l.duePayment || 0), 0);
 
@@ -132,7 +143,7 @@ export const KanbanBoard: React.FC<KanbanBoardProps> = ({
                       {/* Rep & Due */}
                       <div className="text-[10px] text-slate-600 flex items-center justify-between pt-1 border-t border-slate-100">
                         <span className="truncate flex items-center gap-1 text-slate-500">
-                          <User className="w-2.5 h-2.5" />
+                          <UserIcon className="w-2.5 h-2.5" />
                           <span className="truncate max-w-[80px]">{lead.salesPerson}</span>
                         </span>
                         {lead.duePayment && lead.duePayment > 0 ? (
@@ -188,7 +199,7 @@ export const KanbanBoard: React.FC<KanbanBoardProps> = ({
                             <ArrowLeft className="w-3 h-3" />
                           </button>
                           <button
-                            disabled={idx === KANBAN_STAGES.length - 1}
+                            disabled={idx === activeStages.length - 1}
                             onClick={() => moveStage(lead, 'next')}
                             title="Advance"
                             className="p-1 text-indigo-600 hover:text-indigo-800 rounded disabled:opacity-20 cursor-pointer"

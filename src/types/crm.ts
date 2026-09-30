@@ -80,6 +80,8 @@ export interface Lead {
 
   // Helpers for app
   salesEmail?: string;
+  assignedTo?: string;
+  createdBy?: string;
   projectType?: string;
   updatedAt?: string;
   updatedBy?: string;
@@ -111,6 +113,7 @@ export interface User {
   id: string;
   name: string;
   email: string;
+  password?: string;
   role: UserRole;
   status: 'Active' | 'Inactive';
   phone?: string;

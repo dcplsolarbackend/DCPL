@@ -20,9 +20,10 @@ import {
   CreditCard, 
   BarChart3,
   Users,
-  Activity,
+  ShieldCheck,
   X
 } from 'lucide-react';
+import { getVisibleStagesForRole, isAdmin, isSales, isOperations } from '../constants/pipeline';
 
 interface SidebarProps {
   currentView: ViewMode;
@@ -43,58 +44,115 @@ export const Sidebar: React.FC<SidebarProps> = ({
   isOpenOnMobile,
   onCloseMobile,
 }) => {
+  const visibleStages = getVisibleStagesForRole(currentUser.role);
+  const userIsAdmin = isAdmin(currentUser.role);
+  const userIsSales = isSales(currentUser.role);
+  const userIsOps = isOperations(currentUser.role);
+
   const countForStage = (stage: PipelineStage) => {
     return leads.filter((l) => l.status === stage).length;
   };
 
   const duesCount = leads.filter((l) => (l.duePayment || 0) > 0).length;
 
-  const menuSections = [
-    {
-      title: 'Sales & Conversion',
-      items: [
-        { label: 'New Leads', stage: 'New Leads', icon: <Sparkles className="w-4 h-4 text-amber-500" /> },
-        { label: 'Follow Up', stage: 'Follow Up', icon: <PhoneCall className="w-4 h-4 text-blue-500" /> },
-        { label: 'Converted', stage: 'Converted', icon: <Trophy className="w-4 h-4 text-emerald-500" /> },
-        { label: 'Quotation', stage: 'Quotation', icon: <FileText className="w-4 h-4 text-indigo-500" /> },
-        { label: 'Documentation', stage: 'Documentation', icon: <Folder className="w-4 h-4 text-amber-600" /> },
-      ]
-    },
-    {
-      title: 'Operations & Execution',
-      items: [
-        { label: 'Registration', stage: 'Registration', icon: <FileSignature className="w-4 h-4 text-purple-500" /> },
-        { label: 'Loan', stage: 'Loan', icon: <Building2 className="w-4 h-4 text-cyan-600" /> },
-        { label: 'Survey', stage: 'Survey', icon: <Search className="w-4 h-4 text-blue-600" /> },
-        { label: 'Material Dispatch', stage: 'Material Dispatch', icon: <Truck className="w-4 h-4 text-orange-500" /> },
-        { label: 'Installation', stage: 'Installation', icon: <Wrench className="w-4 h-4 text-slate-600" /> },
-        { label: 'Inspection', stage: 'Inspection', icon: <ClipboardCheck className="w-4 h-4 text-teal-600" /> },
-        { label: 'Net Meter', stage: 'Net Meter', icon: <Zap className="w-4 h-4 text-yellow-500" /> },
-        { label: 'Connection', stage: 'Connection', icon: <Plug className="w-4 h-4 text-slate-800" /> },
-      ]
-    },
-    {
-      title: 'Outcome & Archival',
-      items: [
-        { label: 'Complete', stage: 'Complete', icon: <CheckSquare className="w-4 h-4 text-emerald-600" /> },
-        { label: 'Lost', stage: 'Lost', icon: <XCircle className="w-4 h-4 text-rose-500" /> },
-      ]
-    },
-    {
-      title: 'Data & Analytics Views',
-      items: [
-        { label: 'All Data', view: 'table' as ViewMode, icon: <Layers className="w-4 h-4 text-slate-600" />, count: leads.length },
-        { label: 'Payment Details', view: 'payments' as ViewMode, icon: <CreditCard className="w-4 h-4 text-amber-600" />, count: duesCount },
-        { label: 'Main Project Sheet', view: 'dashboard' as ViewMode, icon: <BarChart3 className="w-4 h-4 text-indigo-600" /> },
-      ]
-    },
-    {
+  // Base stage definitions
+  const salesItems = [
+    { label: 'New Leads', stage: 'New Leads' as PipelineStage, icon: <Sparkles className="w-4 h-4 text-amber-500" /> },
+    { label: 'Follow Up', stage: 'Follow Up' as PipelineStage, icon: <PhoneCall className="w-4 h-4 text-blue-500" /> },
+    { label: 'Converted', stage: 'Converted' as PipelineStage, icon: <Trophy className="w-4 h-4 text-emerald-500" /> },
+    { label: 'Quotation', stage: 'Quotation' as PipelineStage, icon: <FileText className="w-4 h-4 text-indigo-500" /> },
+    { label: 'Documentation', stage: 'Documentation' as PipelineStage, icon: <Folder className="w-4 h-4 text-amber-600" /> },
+  ].filter((item) => visibleStages.includes(item.stage));
+
+  const opsItems = [
+    { label: 'Registration', stage: 'Registration' as PipelineStage, icon: <FileSignature className="w-4 h-4 text-purple-500" /> },
+    { label: 'Loan', stage: 'Loan' as PipelineStage, icon: <Building2 className="w-4 h-4 text-cyan-600" /> },
+    { label: 'Survey', stage: 'Survey' as PipelineStage, icon: <Search className="w-4 h-4 text-blue-600" /> },
+    { label: 'Material Dispatch', stage: 'Material Dispatch' as PipelineStage, icon: <Truck className="w-4 h-4 text-orange-500" /> },
+    { label: 'Installation', stage: 'Installation' as PipelineStage, icon: <Wrench className="w-4 h-4 text-slate-600" /> },
+    { label: 'Inspection', stage: 'Inspection' as PipelineStage, icon: <ClipboardCheck className="w-4 h-4 text-teal-600" /> },
+    { label: 'Net Meter', stage: 'Net Meter' as PipelineStage, icon: <Zap className="w-4 h-4 text-yellow-500" /> },
+    { label: 'Connection', stage: 'Connection' as PipelineStage, icon: <Plug className="w-4 h-4 text-slate-800" /> },
+  ].filter((item) => visibleStages.includes(item.stage));
+
+  const outcomeItems = [
+    { label: 'Complete', stage: 'Complete' as PipelineStage, icon: <CheckSquare className="w-4 h-4 text-emerald-600" /> },
+    { label: 'Lost', stage: 'Lost' as PipelineStage, icon: <XCircle className="w-4 h-4 text-rose-500" /> },
+  ].filter((item) => visibleStages.includes(item.stage));
+
+  // Build role-based menu sections
+  const menuSections: {
+    title: string;
+    items: Array<{
+      label: string;
+      stage?: PipelineStage;
+      view?: ViewMode;
+      icon: React.ReactNode;
+      count?: number;
+    }>;
+  }[] = [];
+
+  // 1. Sales section (if stages are visible for role)
+  if (salesItems.length > 0) {
+    menuSections.push({
+      title: userIsSales ? 'My Sales Pipeline' : 'Sales & Conversion',
+      items: salesItems,
+    });
+  }
+
+  // 2. Operations section (if stages are visible for role)
+  if (opsItems.length > 0) {
+    menuSections.push({
+      title: userIsOps ? 'My Execution Pipeline' : 'Operations & Execution',
+      items: opsItems,
+    });
+  }
+
+  // 3. Outcome section (Admin or Ops)
+  if (outcomeItems.length > 0) {
+    menuSections.push({
+      title: 'Project Outcome',
+      items: outcomeItems,
+    });
+  }
+
+  // 4. Data & Views (Adjusted per role)
+  menuSections.push({
+    title: 'Data & Analytics',
+    items: [
+      { 
+        label: userIsSales ? 'My Assigned Leads' : 'All Data', 
+        view: 'table' as ViewMode, 
+        icon: <Layers className="w-4 h-4 text-slate-600" />, 
+        count: leads.length 
+      },
+      ...(!userIsSales ? [{ 
+        label: 'Payment Details', 
+        view: 'payments' as ViewMode, 
+        icon: <CreditCard className="w-4 h-4 text-amber-600" />, 
+        count: duesCount 
+      }] : []),
+      { 
+        label: 'Project Overview', 
+        view: 'dashboard' as ViewMode, 
+        icon: <BarChart3 className="w-4 h-4 text-indigo-600" /> 
+      },
+    ],
+  });
+
+  // 5. Administration (ONLY for Admin)
+  if (userIsAdmin) {
+    menuSections.push({
       title: 'Administration',
       items: [
-        { label: 'Users & Permissions', view: 'users' as ViewMode, icon: <Users className="w-4 h-4 text-slate-700" /> },
-      ]
-    }
-  ];
+        { 
+          label: 'Team & Permissions', 
+          view: 'users' as ViewMode, 
+          icon: <Users className="w-4 h-4 text-slate-700" /> 
+        },
+      ],
+    });
+  }
 
   const content = (
     <div className="flex flex-col justify-between h-full p-3 select-none">
@@ -108,6 +166,20 @@ export const Sidebar: React.FC<SidebarProps> = ({
           >
             <X className="w-5 h-5" />
           </button>
+        </div>
+
+        {/* Role Notice Tag */}
+        <div className="px-2.5 py-1.5 bg-slate-100 rounded-lg flex items-center justify-between border border-slate-200 text-[11px]">
+          <span className="text-slate-500 font-medium">Logged Role:</span>
+          <span className={`font-bold px-2 py-0.5 rounded text-[10px] ${
+            userIsAdmin 
+              ? 'bg-indigo-100 text-indigo-800' 
+              : userIsSales 
+              ? 'bg-emerald-100 text-emerald-800'
+              : 'bg-amber-100 text-amber-800'
+          }`}>
+            {currentUser.role}
+          </span>
         </div>
 
         {menuSections.map((section, sIdx) => (
@@ -173,8 +245,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
       {/* User profile footer */}
       <div className="pt-3 border-t border-slate-100 text-xs text-slate-500 flex items-center justify-between">
         <div className="truncate">
-          <div className="font-semibold text-slate-900 truncate">{currentUser.name}</div>
-          <div className="text-[10px] text-slate-400 capitalize">{currentUser.role}</div>
+          <div className="font-semibold text-slate-900 truncate flex items-center gap-1">
+            <span>{currentUser.name}</span>
+            {userIsAdmin && <ShieldCheck className="w-3 h-3 text-indigo-600" />}
+          </div>
+          <div className="text-[10px] text-slate-400 capitalize">{currentUser.email}</div>
         </div>
         <span className="text-[10px] bg-emerald-100 text-emerald-800 font-bold px-1.5 py-0.5 rounded">
           Active

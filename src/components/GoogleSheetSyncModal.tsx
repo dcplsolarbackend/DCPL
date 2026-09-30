@@ -197,6 +197,42 @@ function doPost(e) {
         .setMimeType(ContentService.MimeType.JSON);
     }
     
+    // Action 4: User Verification & Role Authentication from "Users" Sheet
+    if (req.action === "login") {
+      var usersSheet = ss.getSheetByName("Users");
+      if (!usersSheet) {
+        usersSheet = ss.insertSheet("Users");
+        usersSheet.appendRow(["UserID", "Email", "Password", "Name", "Role", "Status"]);
+        usersSheet.appendRow(["USR-01", "dcplsolarbackend@gmail.com", "admin", "DCPL Solar Admin", "Admin", "Active"]);
+        usersSheet.appendRow(["USR-02", "gurupreetraj12@gmail.com", "sales", "Gurupreet Raj", "Sales Executive", "Active"]);
+      }
+      var usersData = usersSheet.getDataRange().getValues();
+      for (var u = 1; u < usersData.length; u++) {
+        var uEmail = String(usersData[u][1]).toLowerCase().trim();
+        var uPass = String(usersData[u][2]).trim();
+        var uStatus = String(usersData[u][5] || "Active").trim();
+
+        if (uEmail === String(req.email).toLowerCase().trim() && (!uPass || uPass === String(req.password).trim())) {
+          if (uStatus === "Inactive") {
+            return ContentService.createTextOutput(JSON.stringify({ status: "error", message: "User account is suspended (Inactive)." }))
+              .setMimeType(ContentService.MimeType.JSON);
+          }
+          return ContentService.createTextOutput(JSON.stringify({
+            status: "success",
+            user: {
+              id: String(usersData[u][0]),
+              email: String(usersData[u][1]),
+              name: String(usersData[u][3]),
+              role: String(usersData[u][4]),
+              status: uStatus
+            }
+          })).setMimeType(ContentService.MimeType.JSON);
+        }
+      }
+      return ContentService.createTextOutput(JSON.stringify({ status: "error", message: "Invalid Credentials" }))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
+    
     return ContentService.createTextOutput(JSON.stringify({ status: "success" }))
       .setMimeType(ContentService.MimeType.JSON);
       

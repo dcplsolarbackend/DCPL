@@ -2,7 +2,8 @@ import { User, ActivityLog, InAppNotification } from '../types/crm';
 import { INITIAL_USERS } from '../data/initialUsers';
 
 const USERS_STORAGE_KEY = 'crm_users_v2';
-const CURRENT_USER_KEY = 'crm_current_user_v2';
+const CURRENT_USER_KEY = 'dcpl_crm_user';
+const LEGACY_USER_KEY = 'crm_current_user_v2';
 const ACTIVITY_STORAGE_KEY = 'crm_activity_logs_v2';
 const NOTIFICATIONS_KEY = 'crm_notifications_v2';
 
@@ -28,29 +29,50 @@ export function saveUsers(users: User[]): void {
   }
 }
 
-export function getCurrentUser(users: User[]): User {
+/**
+ * Returns currently logged in user from localStorage.
+ * If not logged in or inactive, returns null.
+ */
+export function getStoredUser(users: User[] = loadUsers()): User | null {
   try {
-    const raw = localStorage.getItem(CURRENT_USER_KEY);
+    const raw = localStorage.getItem(CURRENT_USER_KEY) || localStorage.getItem(LEGACY_USER_KEY);
     if (raw) {
       const parsed = JSON.parse(raw);
-      const match = users.find((u) => u.email === parsed.email);
-      if (match && match.status === 'Active') return match;
+      const match = users.find((u) => u.email.toLowerCase() === (parsed.email || '').toLowerCase());
+      if (match && match.status === 'Active') {
+        return match;
+      }
     }
   } catch (e) {
     console.error(e);
   }
-  // Default to Admin (dcplsolarbackend@gmail.com)
-  const defaultAdmin = users.find((u) => u.email === 'dcplsolarbackend@gmail.com') || users[0];
-  setCurrentUser(defaultAdmin);
-  return defaultAdmin;
+  return null;
 }
 
-export function setCurrentUser(user: User): void {
+export function getCurrentUser(users: User[]): User | null {
+  return getStoredUser(users);
+}
+
+export function setStoredUser(user: User | null): void {
   try {
-    localStorage.setItem(CURRENT_USER_KEY, JSON.stringify(user));
+    if (user) {
+      localStorage.setItem(CURRENT_USER_KEY, JSON.stringify(user));
+      localStorage.setItem(LEGACY_USER_KEY, JSON.stringify(user));
+    } else {
+      localStorage.removeItem(CURRENT_USER_KEY);
+      localStorage.removeItem(LEGACY_USER_KEY);
+    }
   } catch (err) {
     console.error(err);
   }
+}
+
+export function setCurrentUser(user: User): void {
+  setStoredUser(user);
+}
+
+export function logoutUser(): void {
+  setStoredUser(null);
 }
 
 export function loadActivityLogs(): ActivityLog[] {

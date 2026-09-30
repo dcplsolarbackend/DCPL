@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { 
   Lead, 
   PaymentRecord, 
@@ -23,14 +23,22 @@ import {
 import { 
   loadUsers, 
   saveUsers, 
-  getCurrentUser, 
-  setCurrentUser,
+  getStoredUser, 
+  setStoredUser,
+  logoutUser,
   loadActivityLogs,
   logActivity,
   loadNotifications,
   saveNotifications,
   addNotification
 } from './utils/userStorage';
+import { 
+  filterLeadsByRole, 
+  getVisibleStagesForRole, 
+  isAdmin, 
+  isSales, 
+  isOperations 
+} from './constants/pipeline';
 import { TopNav } from './components/TopNav';
 import { Sidebar } from './components/Sidebar';
 import { LeadsTable } from './components/LeadsTable';
@@ -44,9 +52,9 @@ import { ProjectDetailsModal } from './components/ProjectDetailsModal';
 import { WhatsAppModal } from './components/WhatsAppModal';
 import { GoogleSheetSyncModal } from './components/GoogleSheetSyncModal';
 import { ShareAppModal } from './components/ShareAppModal';
-import { AuthGate } from './components/AuthGate';
+import { LoginPage } from './components/LoginPage';
 import { MobileBottomNav } from './components/MobileBottomNav';
-import { RotateCcw, CheckCircle2 } from 'lucide-react';
+import { RotateCcw, CheckCircle2, ShieldAlert } from 'lucide-react';
 
 const PUBLIC_APP_URL = 'https://ais-pre-5lwgbql5dcxvmg5zo645wl-134919990515.asia-southeast1.run.app';
 
@@ -54,8 +62,13 @@ export default function App() {
   const [leads, setLeads] = useState<Lead[]>([]);
   const [payments, setPayments] = useState<PaymentRecord[]>([]);
   const [users, setUsers] = useState<User[]>([]);
-  const [currentUser, setCurrentUserState] = useState<User | null>(null);
-  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
+  const [currentUser, setCurrentUserState] = useState<User | null>(() => {
+    return getStoredUser();
+  });
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(() => {
+    const saved = getStoredUser();
+    return !!(saved && saved.status === 'Active');
+  });
 
   const [activityLogs, setActivityLogs] = useState<ActivityLog[]>([]);
   const [notifications, setNotifications] = useState<InAppNotification[]>([]);
@@ -96,15 +109,26 @@ export default function App() {
     setUsers(loadedUsers);
 
     // Check saved session
-    const activeUser = getCurrentUser(loadedUsers);
+    const activeUser = getStoredUser(loadedUsers);
     if (activeUser && activeUser.status === 'Active') {
       setCurrentUserState(activeUser);
       setIsAuthenticated(true);
+    } else {
+      setCurrentUserState(null);
+      setIsAuthenticated(false);
     }
 
     setActivityLogs(loadActivityLogs());
     setNotifications(loadNotifications());
   }, []);
+
+  // Step 2: Role-based Filtered Leads
+  // - Admin: Complete Company Data (All 15 Stages)
+  // - Sales: Only their own assigned / created leads (New Leads -> Documentation)
+  // - Operations: Projects in execution stages (Registration -> Connection/Complete)
+  const roleFilteredLeads = useMemo(() => {
+    return filterLeadsByRole(leads, currentUser);
+  }, [leads, currentUser]);
 
   // Save Lead (Add or Edit)
   const handleSaveLead = (lead: Lead) => {
@@ -432,7 +456,7 @@ export default function App() {
 
   const handleSwitchUser = (user: User) => {
     setCurrentUserState(user);
-    setCurrentUser(user);
+    setStoredUser(user);
     showToast(`Logged in as ${user.name} (${user.role})`);
   };
 
@@ -442,7 +466,7 @@ export default function App() {
     saveUsers(updatedList);
     if (currentUser && currentUser.id === updatedUser.id) {
       setCurrentUserState(updatedUser);
-      setCurrentUser(updatedUser);
+      setStoredUser(updatedUser);
     }
   };
 
@@ -454,6 +478,8 @@ export default function App() {
   };
 
   const handleLogout = () => {
+    logoutUser();
+    localStorage.removeItem('dcpl_crm_user');
     localStorage.removeItem('crm_current_user_v2');
     setCurrentUserState(null);
     setIsAuthenticated(false);
@@ -462,21 +488,23 @@ export default function App() {
 
   const unreadNotifsCount = notifications.filter((n) => !n.read).length;
   const todayStr = new Date().toISOString().split('T')[0];
-  const todayFollowUpsCount = leads.filter(
+  const todayFollowUpsCount = roleFilteredLeads.filter(
     (l) => l.followUpDate === todayStr && l.status !== 'Complete'
   ).length;
 
-  // If not logged in with an active Google email, show AuthGate
+  // Step 1: Protected Route & Login Gate
+  // Agar user logged in nahi hai, toh use direct Dashboard na dikha kar Login Page par redirect karein
   if (!isAuthenticated || !currentUser) {
     return (
-      <AuthGate
+      <LoginPage
         users={users}
-        onLoginSuccess={(loggedInUser) => {
+        onLogin={(loggedInUser) => {
+          setStoredUser(loggedInUser);
           setCurrentUserState(loggedInUser);
-          setCurrentUser(loggedInUser);
           setIsAuthenticated(true);
-          showToast(`Welcome back, ${loggedInUser.name}!`);
+          showToast(`Welcome back, ${loggedInUser.name} (${loggedInUser.role})!`);
         }}
+        syncConfig={syncConfig}
       />
     );
   }
@@ -491,7 +519,42 @@ export default function App() {
           if (view === 'table') setSelectedStageFilter('All');
         }}
         onOpenNewLeadModal={() => {
-          setEditingLead(null);
+          if (isSales(currentUser?.role)) {
+            setEditingLead({
+              leadId: `LD-${Math.floor(100000 + Math.random() * 900000)}`,
+              leadDate: new Date().toISOString().split('T')[0],
+              followUpDate: new Date().toISOString().split('T')[0],
+              nextFollowUp: '',
+              convertedDate: '',
+              quotationDate: '',
+              documentationDate: '',
+              registrationDate: '',
+              loanDate: '',
+              surveyDate: '',
+              mDispatchDate: '',
+              installationDate: '',
+              netMeterDate: '',
+              connectionDate: '',
+              completeDate: '',
+              customerName: '',
+              phone: '',
+              address: '',
+              source: 'Field',
+              salesPerson: currentUser?.name || '',
+              salesEmail: currentUser?.email || '',
+              assignedTo: currentUser?.id || '',
+              createdBy: currentUser?.email || '',
+              status: 'New Leads',
+              systemCapacity: '3.15KW Hybrid',
+              dealAmount: 0,
+              quotationAmount: 0,
+              paymentType: 'Cash',
+              paymentReceived: 0,
+              duePayment: 0,
+            });
+          } else {
+            setEditingLead(null);
+          }
           setIsProjectModalOpen(true);
         }}
         onOpenSyncModal={() => setIsSyncModalOpen(true)}
@@ -545,7 +608,7 @@ export default function App() {
             if (stage) setSelectedStageFilter(stage);
             else if (view === 'table') setSelectedStageFilter('All');
           }}
-          leads={leads}
+          leads={roleFilteredLeads}
           currentUser={currentUser}
           isOpenOnMobile={isMobileSidebarOpen}
           onCloseMobile={() => setIsMobileSidebarOpen(false)}
@@ -556,7 +619,7 @@ export default function App() {
           {/* 1. Main Project Sheet Executive Dashboard */}
           {currentView === 'dashboard' && (
             <DashboardOverview
-              leads={leads}
+              leads={roleFilteredLeads}
               activityLogs={activityLogs}
               onOpenSync={() => setIsSyncModalOpen(true)}
               onSelectStage={(stage) => {
@@ -572,10 +635,14 @@ export default function App() {
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                 <div>
                   <h2 className="text-base font-bold text-slate-900">
-                    {selectedStageFilter === 'All' ? 'Main Project Sheet (Master Data)' : `${selectedStageFilter} Projects`}
+                    {selectedStageFilter === 'All' 
+                      ? (isSales(currentUser?.role) ? 'My Assigned Leads' : 'Main Project Sheet (Master Data)') 
+                      : `${selectedStageFilter} Projects`}
                   </h2>
                   <p className="text-xs text-slate-500">
-                    Exact 44 columns mapped to your live Google Sheet. Click any row to view complete technical details.
+                    {isSales(currentUser?.role) 
+                      ? 'Viewing leads assigned to your sales account. Changes synchronize with the master Google Sheet.' 
+                      : 'Exact 44 columns mapped to your live Google Sheet. Click any row to view complete technical details.'}
                   </p>
                 </div>
 
@@ -597,7 +664,7 @@ export default function App() {
               </div>
 
               <LeadsTable
-                leads={leads}
+                leads={roleFilteredLeads}
                 onEditLead={(lead) => {
                   setEditingLead(lead);
                   setIsProjectModalOpen(true);
@@ -614,14 +681,18 @@ export default function App() {
             </div>
           )}
 
-          {/* 3. 15-Stage Visual Kanban Board */}
+          {/* 3. Visual Kanban Board (Filtered by Role's Visible Stages) */}
           {currentView === 'kanban' && (
             <div className="space-y-4">
               <div className="flex items-center justify-between">
                 <div>
-                  <h2 className="text-base font-bold text-slate-900">15-Stage Project Pipeline</h2>
+                  <h2 className="text-base font-bold text-slate-900">
+                    {isSales(currentUser?.role) ? 'Sales Pipeline (New Leads ➔ Documentation)' : 'Project Pipeline'}
+                  </h2>
                   <p className="text-xs text-slate-500">
-                    Advance customer sites from Lead ➔ Quotation ➔ Survey ➔ Installation ➔ Net Meter & Complete.
+                    {isSales(currentUser?.role)
+                      ? 'Track your active prospects and advance them through qualification and documentation.'
+                      : 'Advance customer sites from Lead ➔ Quotation ➔ Survey ➔ Installation ➔ Net Meter & Complete.'}
                   </p>
                 </div>
                 <button
@@ -633,7 +704,7 @@ export default function App() {
               </div>
 
               <KanbanBoard
-                leads={leads}
+                leads={roleFilteredLeads}
                 onUpdateStatus={handleUpdateStatus}
                 onEditLead={(lead) => {
                   setEditingLead(lead);
@@ -643,6 +714,7 @@ export default function App() {
                   setWhatsAppLead(lead);
                   setIsWhatsAppModalOpen(true);
                 }}
+                currentUser={currentUser}
               />
             </div>
           )}
@@ -650,7 +722,7 @@ export default function App() {
           {/* 4. Follow-Up Schedule View */}
           {currentView === 'followups' && (
             <FollowUpSchedule
-              leads={leads}
+              leads={roleFilteredLeads}
               onOpenWhatsApp={(lead) => {
                 setWhatsAppLead(lead);
                 setIsWhatsAppModalOpen(true);
@@ -667,22 +739,38 @@ export default function App() {
           {currentView === 'payments' && (
             <PaymentSheetView
               payments={payments}
-              leads={leads}
+              leads={roleFilteredLeads}
               onAddPayment={handleAddPayment}
               currentUser={currentUser}
             />
           )}
 
-          {/* 6. Users & Team Management & Granular Column Permissions */}
+          {/* 6. Users & Team Management & Granular Column Permissions (Admin Only) */}
           {currentView === 'users' && (
-            <UsersManagement
-              users={users}
-              currentUser={currentUser}
-              onSwitchUser={handleSwitchUser}
-              onUpdateUser={handleUpdateUser}
-              onAddUser={handleAddUser}
-              activityLogs={activityLogs}
-            />
+            isAdmin(currentUser?.role) ? (
+              <UsersManagement
+                users={users}
+                currentUser={currentUser}
+                onSwitchUser={handleSwitchUser}
+                onUpdateUser={handleUpdateUser}
+                onAddUser={handleAddUser}
+                activityLogs={activityLogs}
+              />
+            ) : (
+              <div className="p-8 text-center bg-white rounded-2xl border border-slate-200 shadow-xs max-w-md mx-auto my-12 space-y-3">
+                <ShieldAlert className="w-12 h-12 text-rose-500 mx-auto" />
+                <h3 className="text-base font-bold text-slate-900">Admin Access Required</h3>
+                <p className="text-xs text-slate-500 leading-relaxed">
+                  User management and permission configuration is restricted to Administrators only.
+                </p>
+                <button
+                  onClick={() => setCurrentView('dashboard')}
+                  className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white font-medium rounded-xl text-xs cursor-pointer"
+                >
+                  Back to Dashboard
+                </button>
+              </div>
+            )
           )}
         </main>
       </div>

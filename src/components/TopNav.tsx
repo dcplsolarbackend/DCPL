@@ -107,16 +107,18 @@ export const TopNav: React.FC<TopNavProps> = ({
         >
           Payment Details
         </button>
-        <button
-          onClick={() => onViewChange('users')}
-          className={`cursor-pointer transition-colors pb-1 flex items-center gap-1 ${
-            currentView === 'users'
-              ? 'text-indigo-600 border-b-2 border-indigo-600 font-semibold'
-              : 'hover:text-slate-900'
-          }`}
-        >
-          <span>Team & Permissions</span>
-        </button>
+        {currentUser.role === 'Admin' && (
+          <button
+            onClick={() => onViewChange('users')}
+            className={`cursor-pointer transition-colors pb-1 flex items-center gap-1 ${
+              currentView === 'users'
+                ? 'text-indigo-600 border-b-2 border-indigo-600 font-semibold'
+                : 'hover:text-slate-900'
+            }`}
+          >
+            <span>Team & Permissions</span>
+          </button>
+        )}
       </nav>
 
       {/* Zone 3: Actions + PWA + Notification & User Status */}
