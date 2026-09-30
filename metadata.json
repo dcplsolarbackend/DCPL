@@ -1,0 +1,8 @@
+{
+  "name": "Customer Management System (CRM)",
+  "description": "Enterprise-grade CRM and Lead Pipeline Management app with Google Sheets sync, follow-up scheduler, due payment tracking, and WhatsApp integration.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
