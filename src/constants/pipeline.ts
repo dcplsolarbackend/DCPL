@@ -1,43 +1,8 @@
 import type { PipelineStage, Lead, User } from '../types/crm';
+import { ALL_STAGES, SALES_VISIBLE_STAGES, OPERATIONS_VISIBLE_STAGES } from './stages';
+import { getVisibleStagesForUser } from '../utils/pipelinePermissions';
 
-export const ALL_STAGES: PipelineStage[] = [
-  'New Leads',
-  'Follow Up',
-  'Converted',
-  'Quotation',
-  'Documentation', // Sales Stages
-  'Registration',
-  'Loan',
-  'Survey',
-  'Material Dispatch',
-  'Installation',
-  'Inspection',
-  'Net Meter',
-  'Connection', // Ops Stages
-  'Complete',
-  'Lost'
-];
-
-export const SALES_VISIBLE_STAGES: PipelineStage[] = [
-  'Lead',
-  'New Leads',
-  'Follow Up',
-  'Converted',
-  'Quotation',
-  'Documentation'
-];
-
-export const OPERATIONS_VISIBLE_STAGES: PipelineStage[] = [
-  'Registration',
-  'Loan',
-  'Survey',
-  'Material Dispatch',
-  'Installation',
-  'Inspection',
-  'Net Meter',
-  'Connection',
-  'Complete'
-];
+export { ALL_STAGES, SALES_VISIBLE_STAGES, OPERATIONS_VISIBLE_STAGES };
 
 export function isAdmin(role?: string): boolean {
   if (!role) return false;
@@ -65,19 +30,16 @@ export function isAccounts(role?: string): boolean {
 /**
  * Returns the list of pipeline stages visible to the user based on their Role
  */
-export function getVisibleStagesForRole(role?: string): PipelineStage[] {
-  if (!role) return ALL_STAGES;
+export function getVisibleStagesForRole(roleOrUser?: string | User | null): PipelineStage[] {
+  if (!roleOrUser) return ALL_STAGES;
+  if (typeof roleOrUser === 'object') {
+    return getVisibleStagesForUser(roleOrUser);
+  }
+  const role = roleOrUser;
   if (isAdmin(role)) {
     return ALL_STAGES;
   }
-  if (isSales(role)) {
-    return SALES_VISIBLE_STAGES;
-  }
-  if (isOperations(role)) {
-    return OPERATIONS_VISIBLE_STAGES;
-  }
-  // Accounts / Viewer sees all stages
-  return ALL_STAGES;
+  return getVisibleStagesForUser({ role } as any);
 }
 
 /**

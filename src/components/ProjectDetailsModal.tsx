@@ -6,6 +6,7 @@ import {
   canEditColumn,
   ColumnAccessRule 
 } from '../utils/permissionStorage';
+import { validateLeadForStage } from '../utils/pipelinePermissions';
 import { 
   X, 
   Save, 
@@ -19,7 +20,8 @@ import {
   ExternalLink,
   Plus,
   Receipt,
-  Lock
+  Lock,
+  FolderGit2
 } from 'lucide-react';
 
 interface ProjectDetailsModalProps {
@@ -30,6 +32,7 @@ interface ProjectDetailsModalProps {
   payments: PaymentRecord[];
   onAddPaymentForLead: (leadId: string) => void;
   currentUser: User;
+  users?: User[];
 }
 
 const STAGES: PipelineStage[] = [
@@ -59,6 +62,7 @@ export const ProjectDetailsModal: React.FC<ProjectDetailsModalProps> = ({
   payments,
   onAddPaymentForLead,
   currentUser,
+  users = [],
 }) => {
   const [formData, setFormData] = useState<Partial<Lead>>({});
   const [activeTab, setActiveTab] = useState<'info' | 'technical' | 'dates' | 'files' | 'payments'>('info');
@@ -81,8 +85,11 @@ export const ProjectDetailsModal: React.FC<ProjectDetailsModalProps> = ({
         phone: '',
         address: '',
         source: 'Field',
-        salesPerson: currentUser.email,
-        status: 'Lead',
+        salesPerson: currentUser.name,
+        salesEmail: currentUser.email,
+        assignedTo: currentUser.id,
+        driveFolderUrl: '',
+        status: 'New Leads',
         systemCapacity: '3.15KW On-Grid',
         dealAmount: 0,
         quotationAmount: 0,
@@ -114,6 +121,12 @@ export const ProjectDetailsModal: React.FC<ProjectDetailsModalProps> = ({
     const received = Number(formData.paymentReceived) || 0;
     const due = Math.max(0, deal - received);
 
+    // Resolve Sales Person name & backend email
+    const salesPersonName = formData.salesPerson || currentUser.name;
+    const matchedUser = (users || []).find((u) => u.name === salesPersonName);
+    const resolvedEmail = matchedUser ? matchedUser.email : (formData.salesEmail || currentUser.email);
+    const resolvedAssignedTo = matchedUser ? matchedUser.id : (formData.assignedTo || currentUser.id);
+
     const updatedLead: Lead = {
       leadId: formData.leadId || Math.floor(10000000 + Math.random() * 90000000).toString(16).substring(0, 8),
       leadDate: formData.leadDate || '',
@@ -134,9 +147,11 @@ export const ProjectDetailsModal: React.FC<ProjectDetailsModalProps> = ({
       phone: formData.phone,
       address: formData.address || '',
       source: formData.source || 'Field',
-      salesPerson: formData.salesPerson || currentUser.email,
-      salesEmail: formData.salesPerson?.includes('@') ? formData.salesPerson : currentUser.email,
-      status: (formData.status as PipelineStage) || 'Lead',
+      salesPerson: salesPersonName,
+      salesEmail: resolvedEmail,
+      assignedTo: resolvedAssignedTo,
+      driveFolderUrl: formData.driveFolderUrl || '',
+      status: (formData.status as PipelineStage) || 'New Leads',
       systemCapacity: formData.systemCapacity || '',
       dealAmount: deal,
       quotationAmount: Number(formData.quotationAmount) || deal,
@@ -162,6 +177,13 @@ export const ProjectDetailsModal: React.FC<ProjectDetailsModalProps> = ({
       firstPaymentMonth: formData.firstPaymentMonth || '',
       projectType: formData.systemCapacity || 'Solar Power Project',
     };
+
+    // Stage-wise mandatory fields validation
+    const validation = validateLeadForStage(updatedLead, updatedLead.status);
+    if (!validation.isValid) {
+      alert(validation.errorMessage);
+      return;
+    }
 
     onSaveLead(updatedLead);
     onClose();
@@ -347,15 +369,68 @@ export const ProjectDetailsModal: React.FC<ProjectDetailsModalProps> = ({
                   />
                 </div>
                 <div>
-                  <label className="block font-semibold text-slate-700 mb-1">Sales Person (Col 20)</label>
-                  <input
-                    type="text"
-                    placeholder="e.g. gurupreetraj12@gmail.com"
-                    value={formData.salesPerson}
-                    onChange={(e) => setFormData({ ...formData, salesPerson: e.target.value })}
-                    className="w-full px-3 py-2 border border-slate-300 rounded-lg font-mono text-[11px]"
-                  />
+                  <label className="block font-semibold text-slate-700 mb-1">
+                    Sales Person Name (Col 20)
+                  </label>
+                  <select
+                    disabled={!isEditable('salesPerson') || (currentUser.role.includes('Sales') && currentUser.role !== 'Sales Manager')}
+                    value={formData.salesPerson || ''}
+                    onChange={(e) => {
+                      const selectedName = e.target.value;
+                      const matched = (users || []).find((u) => u.name === selectedName);
+                      setFormData({
+                        ...formData,
+                        salesPerson: selectedName,
+                        salesEmail: matched ? matched.email : (selectedName.includes('@') ? selectedName : formData.salesEmail),
+                        assignedTo: matched ? matched.id : formData.assignedTo,
+                      });
+                    }}
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs font-semibold text-slate-900 bg-white"
+                  >
+                    <option value="">-- Select Sales Person --</option>
+                    {(users || []).map((u) => (
+                      <option key={u.id} value={u.name}>
+                        {u.name} ({u.role})
+                      </option>
+                    ))}
+                  </select>
+                  {formData.salesEmail && (
+                    <span className="text-[10px] text-slate-400 font-mono mt-0.5 block">
+                      Backend Security Key: {formData.salesEmail}
+                    </span>
+                  )}
                 </div>
+              </div>
+
+              {/* Google Drive Folder Link */}
+              <div className="p-3 bg-indigo-50/70 border border-indigo-200 rounded-xl space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <label className="font-semibold text-indigo-950 text-xs flex items-center gap-1.5">
+                    <FolderGit2 className="w-4 h-4 text-indigo-600" />
+                    <span>Customer Google Drive Folder (Site Photos, Quotations & Documents)</span>
+                  </label>
+                  {formData.driveFolderUrl && (
+                    <a
+                      href={formData.driveFolderUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg shadow-2xs"
+                    >
+                      <ExternalLink className="w-3 h-3" />
+                      <span>Open in Drive</span>
+                    </a>
+                  )}
+                </div>
+                <input
+                  type="url"
+                  placeholder="https://drive.google.com/drive/folders/..."
+                  value={formData.driveFolderUrl || ''}
+                  onChange={(e) => setFormData({ ...formData, driveFolderUrl: e.target.value })}
+                  className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg font-mono text-[11px] text-slate-800"
+                />
+                <p className="text-[10px] text-slate-500">
+                  Site survey photos, electricity bills, quotation PDFs, and approval documents are linked directly to this Google Drive folder.
+                </p>
               </div>
 
               {/* Financial Balance Summary */}

@@ -12,7 +12,8 @@ import {
   Check,
   Zap,
   Info,
-  ExternalLink
+  ExternalLink,
+  FolderGit2
 } from 'lucide-react';
 
 interface LeadsTableProps {
@@ -366,6 +367,20 @@ export const LeadsTable: React.FC<LeadsTableProps> = ({
                         >
                           <Edit3 className="w-4 h-4" />
                         </button>
+
+                        {/* Google Drive Folder */}
+                        {lead.driveFolderUrl && (
+                          <a
+                            href={lead.driveFolderUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            title="Open Customer Google Drive Folder"
+                            className="p-1.5 text-indigo-600 hover:bg-indigo-50 rounded-md transition-colors inline-block"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            <FolderGit2 className="w-4 h-4" />
+                          </a>
+                        )}
 
                         {/* Delete */}
                         {canDelete && (

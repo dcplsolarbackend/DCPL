@@ -78,6 +78,9 @@ export interface Lead {
   lastModifiedTime?: string;     // Col 43: Last Modified Time
   firstPaymentMonth?: string;    // Col 44: First Payment Month
 
+  // Google Drive integration
+  driveFolderUrl?: string;       // Customer Google Drive folder URL for site photos & docs
+
   // Helpers for app
   salesEmail?: string;
   assignedTo?: string;
@@ -122,6 +125,7 @@ export interface User {
   createdAt: string;
   loggedInAt?: number;
   expiryAt?: number;
+  customAllowedStages?: PipelineStage[];
 }
 
 export interface ActivityLog {

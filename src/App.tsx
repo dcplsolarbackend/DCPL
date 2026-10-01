@@ -62,35 +62,9 @@ export default function App() {
   const [leads, setLeads] = useState<Lead[]>([]);
   const [payments, setPayments] = useState<PaymentRecord[]>([]);
   const [users, setUsers] = useState<User[]>([]);
-  const [currentUser, setCurrentUserState] = useState<User | null>(() => {
-    const saved = localStorage.getItem('dcpl_crm_user');
-    if (!saved) return null;
-    try {
-      const parsed = JSON.parse(saved);
-      // Session Expiry Check (8 hours limit)
-      if (parsed.expiryAt && Date.now() > parsed.expiryAt) {
-        localStorage.removeItem('dcpl_crm_user');
-        return null;
-      }
-      return parsed.status === 'Active' ? parsed : null;
-    } catch {
-      localStorage.removeItem('dcpl_crm_user');
-      return null;
-    }
-  });
-  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(() => {
-    const saved = localStorage.getItem('dcpl_crm_user');
-    if (!saved) return false;
-    try {
-      const parsed = JSON.parse(saved);
-      if (parsed.expiryAt && Date.now() > parsed.expiryAt) {
-        return false;
-      }
-      return parsed.status === 'Active';
-    } catch {
-      return false;
-    }
-  });
+  // Always require login on link open
+  const [currentUser, setCurrentUserState] = useState<User | null>(null);
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
 
   const [activityLogs, setActivityLogs] = useState<ActivityLog[]>([]);
   const [notifications, setNotifications] = useState<InAppNotification[]>([]);
@@ -129,16 +103,6 @@ export default function App() {
 
     const loadedUsers = loadUsers();
     setUsers(loadedUsers);
-
-    // Check saved session
-    const activeUser = getStoredUser(loadedUsers);
-    if (activeUser && activeUser.status === 'Active') {
-      setCurrentUserState(activeUser);
-      setIsAuthenticated(true);
-    } else {
-      setCurrentUserState(null);
-      setIsAuthenticated(false);
-    }
 
     setActivityLogs(loadActivityLogs());
     setNotifications(loadNotifications());
@@ -828,6 +792,7 @@ export default function App() {
           setIsProjectModalOpen(false);
         }}
         currentUser={currentUser}
+        users={users}
       />
 
       {/* WhatsApp Quick Message Modal */}
