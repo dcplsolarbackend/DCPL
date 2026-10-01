@@ -63,11 +63,33 @@ export default function App() {
   const [payments, setPayments] = useState<PaymentRecord[]>([]);
   const [users, setUsers] = useState<User[]>([]);
   const [currentUser, setCurrentUserState] = useState<User | null>(() => {
-    return getStoredUser();
+    const saved = localStorage.getItem('dcpl_crm_user');
+    if (!saved) return null;
+    try {
+      const parsed = JSON.parse(saved);
+      // Session Expiry Check (8 hours limit)
+      if (parsed.expiryAt && Date.now() > parsed.expiryAt) {
+        localStorage.removeItem('dcpl_crm_user');
+        return null;
+      }
+      return parsed.status === 'Active' ? parsed : null;
+    } catch {
+      localStorage.removeItem('dcpl_crm_user');
+      return null;
+    }
   });
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(() => {
-    const saved = getStoredUser();
-    return !!(saved && saved.status === 'Active');
+    const saved = localStorage.getItem('dcpl_crm_user');
+    if (!saved) return false;
+    try {
+      const parsed = JSON.parse(saved);
+      if (parsed.expiryAt && Date.now() > parsed.expiryAt) {
+        return false;
+      }
+      return parsed.status === 'Active';
+    } catch {
+      return false;
+    }
   });
 
   const [activityLogs, setActivityLogs] = useState<ActivityLog[]>([]);
@@ -493,18 +515,18 @@ export default function App() {
   ).length;
 
   // Step 1: Protected Route & Login Gate
-  // Agar user logged in nahi hai, toh use direct Dashboard na dikha kar Login Page par redirect karein
-  if (!isAuthenticated || !currentUser) {
+  // Direct login screen if session is empty or expired
+  if (!currentUser || !isAuthenticated) {
     return (
       <LoginPage
-        users={users}
-        onLogin={(loggedInUser) => {
+        onLoginSuccess={(loggedInUser) => {
           setStoredUser(loggedInUser);
           setCurrentUserState(loggedInUser);
           setIsAuthenticated(true);
           showToast(`Welcome back, ${loggedInUser.name} (${loggedInUser.role})!`);
         }}
-        syncConfig={syncConfig}
+        webAppUrl={syncConfig.webAppUrl || (typeof window !== 'undefined' ? localStorage.getItem('dcpl_apps_script_url') || '' : '')}
+        users={users}
       />
     );
   }

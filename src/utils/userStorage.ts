@@ -38,9 +38,23 @@ export function getStoredUser(users: User[] = loadUsers()): User | null {
     const raw = localStorage.getItem(CURRENT_USER_KEY) || localStorage.getItem(LEGACY_USER_KEY);
     if (raw) {
       const parsed = JSON.parse(raw);
+      // Session Expiry Check (8 hours limit)
+      if (parsed.expiryAt && Date.now() > parsed.expiryAt) {
+        localStorage.removeItem(CURRENT_USER_KEY);
+        localStorage.removeItem(LEGACY_USER_KEY);
+        return null;
+      }
       const match = users.find((u) => u.email.toLowerCase() === (parsed.email || '').toLowerCase());
-      if (match && match.status === 'Active') {
-        return match;
+      if (match) {
+        if (match.status !== 'Active') {
+          localStorage.removeItem(CURRENT_USER_KEY);
+          localStorage.removeItem(LEGACY_USER_KEY);
+          return null;
+        }
+        return { ...match, ...parsed };
+      }
+      if (parsed.status === 'Active') {
+        return parsed;
       }
     }
   } catch (e) {

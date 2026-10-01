@@ -120,6 +120,8 @@ export interface User {
   assignedLeadsCount?: number;
   lastActive: string;
   createdAt: string;
+  loggedInAt?: number;
+  expiryAt?: number;
 }
 
 export interface ActivityLog {

@@ -12,13 +12,22 @@ import {
   Plus, 
   Mail, 
   Search, 
-  LogIn,
-  Activity,
-  CheckCircle2,
-  Lock,
-  Eye,
-  Sliders,
-  RotateCcw
+  Activity, 
+  CheckCircle2, 
+  Lock, 
+  Eye, 
+  EyeOff, 
+  Sliders, 
+  RotateCcw,
+  KeyRound,
+  Edit2,
+  Copy,
+  Check,
+  Sparkles,
+  Smartphone,
+  ShieldAlert,
+  Save,
+  X
 } from 'lucide-react';
 
 interface UsersManagementProps {
@@ -48,8 +57,21 @@ export const UsersManagement: React.FC<UsersManagementProps> = ({
 }) => {
   const [activeTab, setActiveTab] = useState<'users' | 'columns' | 'activity'>('users');
   const [searchTerm, setSearchTerm] = useState('');
+  
+  // Modals
   const [isAddUserModalOpen, setIsAddUserModalOpen] = useState(false);
-  const [emailLoginInput, setEmailLoginInput] = useState('');
+  const [isEditUserModalOpen, setIsEditUserModalOpen] = useState(false);
+  const [selectedUserForEdit, setSelectedUserForEdit] = useState<User | null>(null);
+
+  // Edit User Form State
+  const [editName, setEditName] = useState('');
+  const [editEmail, setEditEmail] = useState('');
+  const [editPassword, setEditPassword] = useState('');
+  const [editRole, setEditRole] = useState<UserRole>('Sales Executive');
+  const [editStatus, setEditStatus] = useState<'Active' | 'Inactive'>('Active');
+  const [editPhone, setEditPhone] = useState('');
+  const [showEditPassword, setShowEditPassword] = useState(false);
+  const [editModalMessage, setEditModalMessage] = useState<string | null>(null);
 
   // Column Permissions state
   const [columnRules, setColumnRules] = useState<ColumnAccessRule[]>(loadColumnPermissions());
@@ -58,8 +80,14 @@ export const UsersManagement: React.FC<UsersManagementProps> = ({
   // New user form state
   const [newUserName, setNewUserName] = useState('');
   const [newUserEmail, setNewUserEmail] = useState('');
+  const [newUserPassword, setNewUserPassword] = useState('');
   const [newUserRole, setNewUserRole] = useState<UserRole>('Sales Executive');
   const [newUserPhone, setNewUserPhone] = useState('');
+  const [showNewPassword, setShowNewPassword] = useState(false);
+
+  // Password visibility map for table rows
+  const [visiblePasswordMap, setVisiblePasswordMap] = useState<Record<string, boolean>>({});
+  const [copiedEmailMap, setCopiedEmailMap] = useState<Record<string, boolean>>({});
 
   const isAdmin = currentUser.role === 'Admin';
 
@@ -76,6 +104,75 @@ export const UsersManagement: React.FC<UsersManagementProps> = ({
       c.category.toLowerCase().includes(colSearch.toLowerCase()) ||
       c.columnKey.toLowerCase().includes(colSearch.toLowerCase())
   );
+
+  const togglePasswordVisibility = (userId: string) => {
+    setVisiblePasswordMap((prev) => ({
+      ...prev,
+      [userId]: !prev[userId],
+    }));
+  };
+
+  const copyToClipboard = (text: string, key: string) => {
+    navigator.clipboard.writeText(text);
+    setCopiedEmailMap((prev) => ({ ...prev, [key]: true }));
+    setTimeout(() => {
+      setCopiedEmailMap((prev) => ({ ...prev, [key]: false }));
+    }, 2000);
+  };
+
+  const handleOpenEditModal = (targetUser: User) => {
+    setSelectedUserForEdit(targetUser);
+    setEditName(targetUser.name);
+    setEditEmail(targetUser.email);
+    setEditPassword(targetUser.password || 'dcpl123');
+    setEditRole(targetUser.role);
+    setEditStatus(targetUser.status);
+    setEditPhone(targetUser.phone || '');
+    setShowEditPassword(false);
+    setEditModalMessage(null);
+    setIsEditUserModalOpen(true);
+  };
+
+  const handleSaveEditUser = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedUserForEdit) return;
+
+    const cleanEmail = editEmail.trim().toLowerCase();
+    const cleanPassword = editPassword.trim();
+
+    if (!cleanEmail || !editName.trim()) {
+      setEditModalMessage('Name and Email are required.');
+      return;
+    }
+
+    if (!cleanPassword) {
+      setEditModalMessage('Password cannot be empty.');
+      return;
+    }
+
+    // Check duplicate email
+    const duplicate = users.find(
+      (u) => u.id !== selectedUserForEdit.id && u.email.toLowerCase() === cleanEmail
+    );
+    if (duplicate) {
+      setEditModalMessage(`A user with email ${cleanEmail} already exists (${duplicate.name}).`);
+      return;
+    }
+
+    const updated: User = {
+      ...selectedUserForEdit,
+      name: editName.trim(),
+      email: cleanEmail,
+      password: cleanPassword,
+      role: editRole,
+      status: editStatus,
+      phone: editPhone.trim(),
+      lastActive: 'Credentials updated',
+    };
+
+    onUpdateUser(updated);
+    setIsEditUserModalOpen(false);
+  };
 
   const handleToggleStatus = (targetUser: User) => {
     if (!isAdmin) {
@@ -108,21 +205,25 @@ export const UsersManagement: React.FC<UsersManagementProps> = ({
 
   const handleCreateUser = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newUserEmail || !newUserName) return;
+    const cleanEmail = newUserEmail.trim().toLowerCase();
+    const cleanPassword = newUserPassword.trim() || 'dcpl123';
 
-    if (users.some((u) => u.email.toLowerCase() === newUserEmail.toLowerCase())) {
+    if (!cleanEmail || !newUserName.trim()) return;
+
+    if (users.some((u) => u.email.toLowerCase() === cleanEmail)) {
       alert('A user with this email address already exists!');
       return;
     }
 
     const created: User = {
       id: `USR-${Math.floor(100 + Math.random() * 900)}`,
-      name: newUserName,
-      email: newUserEmail.toLowerCase(),
+      name: newUserName.trim(),
+      email: cleanEmail,
+      password: cleanPassword,
       role: newUserRole,
       status: 'Active',
-      phone: newUserPhone || '',
-      lastActive: 'Just joined',
+      phone: newUserPhone.trim() || '',
+      lastActive: 'Just registered',
       createdAt: new Date().toISOString().split('T')[0],
     };
 
@@ -130,22 +231,9 @@ export const UsersManagement: React.FC<UsersManagementProps> = ({
     setIsAddUserModalOpen(false);
     setNewUserName('');
     setNewUserEmail('');
+    setNewUserPassword('');
     setNewUserPhone('');
-  };
-
-  const handleEmailDirectLogin = (e: React.FormEvent) => {
-    e.preventDefault();
-    const found = users.find((u) => u.email.toLowerCase() === emailLoginInput.toLowerCase().trim());
-    if (!found) {
-      alert('No user found with this email. Please check spelling or contact Administrator.');
-      return;
-    }
-    if (found.status === 'Inactive') {
-      alert('This user account is currently set to INACTIVE. Please contact Admin.');
-      return;
-    }
-    onSwitchUser(found);
-    setEmailLoginInput('');
+    setShowNewPassword(false);
   };
 
   // Toggle View role permission
@@ -187,10 +275,10 @@ export const UsersManagement: React.FC<UsersManagementProps> = ({
 
   return (
     <div className="space-y-6">
-      {/* Current Session Banner */}
-      <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4">
+      {/* Current Session Banner with Security Info */}
+      <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-full bg-indigo-600 text-white flex items-center justify-center font-bold text-sm shadow-xs">
+          <div className="w-11 h-11 rounded-2xl bg-indigo-600 text-white flex items-center justify-center font-bold text-base shadow-xs">
             {currentUser.name.charAt(0)}
           </div>
           <div>
@@ -203,32 +291,25 @@ export const UsersManagement: React.FC<UsersManagementProps> = ({
                 Active Session
               </span>
             </div>
-            <div className="text-xs text-slate-500 font-mono mt-0.5">
-              Logged in as: <strong>{currentUser.email}</strong>
+            <div className="text-xs text-slate-500 font-mono mt-0.5 flex items-center gap-2">
+              <span>Admin Email: <strong>{currentUser.email}</strong></span>
+              <span className="text-slate-300">•</span>
+              <span className="text-slate-400">Manage all staff emails, passwords, and role permissions below</span>
             </div>
           </div>
         </div>
 
-        {/* Quick Email Switcher */}
-        <form onSubmit={handleEmailDirectLogin} className="flex items-center gap-2">
-          <div className="relative">
-            <Mail className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
-            <input
-              type="email"
-              placeholder="Switch user by email..."
-              value={emailLoginInput}
-              onChange={(e) => setEmailLoginInput(e.target.value)}
-              className="pl-8 pr-3 py-1.5 text-xs bg-slate-50 border border-slate-300 rounded-lg w-56 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
-            />
+        {isAdmin && (
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              onClick={() => setIsAddUserModalOpen(true)}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl transition-colors cursor-pointer shadow-xs whitespace-nowrap"
+            >
+              <Plus className="w-4 h-4" />
+              <span>Add New User & Password</span>
+            </button>
           </div>
-          <button
-            type="submit"
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-slate-900 hover:bg-slate-800 rounded-lg transition-colors cursor-pointer"
-          >
-            <LogIn className="w-3.5 h-3.5" />
-            <span>Switch</span>
-          </button>
-        </form>
+        )}
       </div>
 
       {/* Navigation Tabs */}
@@ -241,8 +322,8 @@ export const UsersManagement: React.FC<UsersManagementProps> = ({
               : 'border-transparent text-slate-600 hover:text-slate-900'
           }`}
         >
-          <Users className="w-4 h-4" />
-          <span>Team Directory & Active/Inactive ({users.length})</span>
+          <KeyRound className="w-4 h-4 text-indigo-600" />
+          <span>User Credentials & Passwords ({users.length})</span>
         </button>
 
         <button
@@ -253,7 +334,7 @@ export const UsersManagement: React.FC<UsersManagementProps> = ({
               : 'border-transparent text-slate-600 hover:text-slate-900'
           }`}
         >
-          <Sliders className="w-4 h-4 text-indigo-600" />
+          <Sliders className="w-4 h-4 text-slate-600" />
           <span>Column & Field Permissions ({columnRules.length})</span>
         </button>
 
@@ -266,34 +347,32 @@ export const UsersManagement: React.FC<UsersManagementProps> = ({
           }`}
         >
           <Activity className="w-4 h-4 text-blue-600" />
-          <span>Audit Activity Log ({activityLogs.length})</span>
+          <span>Security Audit Log ({activityLogs.length})</span>
         </button>
       </div>
 
-      {/* TAB 1: User Management List */}
+      {/* TAB 1: User Credentials & Passwords Management Table */}
       {activeTab === 'users' && (
-        <div className="bg-white rounded-xl border border-slate-200 shadow-xs overflow-hidden">
-          <div className="p-4 border-b border-slate-200 bg-slate-50/50 flex flex-col sm:flex-row items-center justify-between gap-3">
-            <div className="relative w-full sm:w-72">
+        <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
+          <div className="p-4 border-b border-slate-200 bg-slate-50/70 flex flex-col sm:flex-row items-center justify-between gap-3">
+            <div className="relative w-full sm:w-80">
               <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
               <input
                 type="text"
                 placeholder="Search by name, email, or role..."
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
-                className="w-full pl-9 pr-3 py-1.5 text-xs bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
+                className="w-full pl-9 pr-3 py-1.5 text-xs bg-white border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
               />
             </div>
 
-            {isAdmin && (
-              <button
-                onClick={() => setIsAddUserModalOpen(true)}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg transition-colors cursor-pointer whitespace-nowrap"
-              >
-                <Plus className="w-3.5 h-3.5" />
-                <span>Add Team Member</span>
-              </button>
-            )}
+            <div className="flex items-center gap-2 text-xs text-slate-500">
+              <span className="hidden sm:inline">Total Staff: <strong>{users.length}</strong></span>
+              <span className="hidden sm:inline">•</span>
+              <span className="text-emerald-600 font-medium">
+                Active: {users.filter((u) => u.status === 'Active').length}
+              </span>
+            </div>
           </div>
 
           <div className="overflow-x-auto">
@@ -302,22 +381,26 @@ export const UsersManagement: React.FC<UsersManagementProps> = ({
                 <tr className="border-b border-slate-200 bg-slate-100/70 text-[11px] font-semibold text-slate-600 uppercase tracking-wider">
                   <th className="py-3 px-4">User Details</th>
                   <th className="py-3 px-4">Role Assigned</th>
+                  <th className="py-3 px-4">Login Password</th>
                   <th className="py-3 px-4">Access Status</th>
-                  <th className="py-3 px-4">Last Activity</th>
-                  <th className="py-3 px-4 text-center">Quick Switch / Login</th>
-                  {isAdmin && <th className="py-3 px-4 text-center">Admin Controls</th>}
+                  <th className="py-3 px-4 text-center">Set Email & Password</th>
+                  <th className="py-3 px-4 text-center">Active Toggle</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 text-xs">
                 {filteredUsers.map((u) => {
                   const isCurrent = u.email === currentUser.email;
+                  const isPasswordVisible = !!visiblePasswordMap[u.id];
+                  const userPassword = u.password || 'dcpl123';
+                  const isCopied = !!copiedEmailMap[u.id];
 
                   return (
                     <tr key={u.id} className="hover:bg-slate-50/80 transition-colors">
+                      {/* User Info & Email */}
                       <td className="py-3 px-4">
                         <div className="flex items-center gap-2.5">
                           <div
-                            className={`w-7 h-7 rounded-full flex items-center justify-center font-bold text-xs ${
+                            className={`w-8 h-8 rounded-xl flex items-center justify-center font-bold text-xs shrink-0 ${
                               u.status === 'Active'
                                 ? 'bg-slate-900 text-white'
                                 : 'bg-slate-200 text-slate-500'
@@ -334,17 +417,30 @@ export const UsersManagement: React.FC<UsersManagementProps> = ({
                                 </span>
                               )}
                             </div>
-                            <div className="text-[11px] text-slate-500 font-mono">{u.email}</div>
+                            <div className="text-[11px] text-slate-500 font-mono flex items-center gap-1 mt-0.5">
+                              <span>{u.email}</span>
+                              <button
+                                onClick={() => copyToClipboard(u.email, u.id)}
+                                title="Copy Email"
+                                className="text-slate-400 hover:text-slate-700 p-0.5 rounded cursor-pointer"
+                              >
+                                {isCopied ? <Check className="w-3 h-3 text-emerald-600" /> : <Copy className="w-3 h-3" />}
+                              </button>
+                            </div>
+                            {u.phone && (
+                              <div className="text-[10px] text-slate-400 font-mono">{u.phone}</div>
+                            )}
                           </div>
                         </div>
                       </td>
 
+                      {/* Role Dropdown */}
                       <td className="py-3 px-4">
                         {isAdmin ? (
                           <select
                             value={u.role}
                             onChange={(e) => handleRoleChange(u, e.target.value as UserRole)}
-                            className="text-xs bg-white border border-slate-300 rounded-md px-2 py-1 focus:ring-1 focus:ring-indigo-500 cursor-pointer font-medium"
+                            className="text-xs bg-white border border-slate-300 rounded-lg px-2.5 py-1 focus:ring-1 focus:ring-indigo-500 cursor-pointer font-medium text-slate-800"
                           >
                             {ROLES.map((r) => (
                               <option key={r} value={r}>
@@ -353,15 +449,34 @@ export const UsersManagement: React.FC<UsersManagementProps> = ({
                             ))}
                           </select>
                         ) : (
-                          <span className="text-xs px-2 py-0.5 rounded bg-slate-100 text-slate-700 font-medium">
+                          <span className="text-xs px-2.5 py-1 rounded-lg bg-slate-100 text-slate-700 font-medium">
                             {u.role}
                           </span>
                         )}
                       </td>
 
+                      {/* Password Field with Eye Toggle */}
+                      <td className="py-3 px-4">
+                        <div className="flex items-center gap-1.5 bg-slate-50 border border-slate-200 px-2.5 py-1 rounded-lg w-fit">
+                          <Lock className="w-3 h-3 text-slate-400 shrink-0" />
+                          <span className="font-mono text-xs font-semibold text-slate-800 tracking-wider">
+                            {isPasswordVisible ? userPassword : '••••••••'}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => togglePasswordVisibility(u.id)}
+                            title={isPasswordVisible ? 'Hide password' : 'Show password'}
+                            className="text-slate-400 hover:text-slate-700 p-0.5 ml-1 cursor-pointer"
+                          >
+                            {isPasswordVisible ? <EyeOff className="w-3 h-3" /> : <Eye className="w-3 h-3" />}
+                          </button>
+                        </div>
+                      </td>
+
+                      {/* Access Status */}
                       <td className="py-3 px-4 whitespace-nowrap">
                         <span
-                          className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium ${
+                          className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-semibold ${
                             u.status === 'Active'
                               ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
                               : 'bg-rose-50 text-rose-700 border border-rose-200'
@@ -376,41 +491,31 @@ export const UsersManagement: React.FC<UsersManagementProps> = ({
                         </span>
                       </td>
 
-                      <td className="py-3 px-4 text-slate-500 text-[11px] whitespace-nowrap">
-                        {u.lastActive}
-                      </td>
-
+                      {/* Set Email & Password Button */}
                       <td className="py-3 px-4 text-center whitespace-nowrap">
-                        {isCurrent ? (
-                          <span className="text-xs text-emerald-600 font-medium flex items-center justify-center gap-1">
-                            <CheckCircle2 className="w-3.5 h-3.5" />
-                            Current Session
-                          </span>
-                        ) : (
-                          <button
-                            disabled={u.status === 'Inactive'}
-                            onClick={() => onSwitchUser(u)}
-                            className="px-2.5 py-1 text-xs text-indigo-700 bg-indigo-50 hover:bg-indigo-100 rounded-md transition-colors cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
-                          >
-                            Log in as {u.name.split(' ')[0]}
-                          </button>
-                        )}
+                        <button
+                          onClick={() => handleOpenEditModal(u)}
+                          className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-semibold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 rounded-xl transition-colors cursor-pointer shadow-2xs"
+                        >
+                          <KeyRound className="w-3.5 h-3.5 text-indigo-600" />
+                          <span>Set Password / Edit</span>
+                        </button>
                       </td>
 
-                      {isAdmin && (
-                        <td className="py-3 px-4 text-center whitespace-nowrap">
-                          <button
-                            onClick={() => handleToggleStatus(u)}
-                            className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors cursor-pointer ${
-                              u.status === 'Active'
-                                ? 'text-rose-700 hover:bg-rose-50 border border-rose-200'
-                                : 'text-emerald-700 hover:bg-emerald-50 border border-emerald-200'
-                            }`}
-                          >
-                            {u.status === 'Active' ? 'Deactivate' : 'Activate User'}
-                          </button>
-                        </td>
-                      )}
+                      {/* Deactivate / Activate Toggle */}
+                      <td className="py-3 px-4 text-center whitespace-nowrap">
+                        <button
+                          disabled={isCurrent}
+                          onClick={() => handleToggleStatus(u)}
+                          className={`px-2.5 py-1 text-xs font-medium rounded-lg transition-colors cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed ${
+                            u.status === 'Active'
+                              ? 'text-rose-700 hover:bg-rose-50 border border-rose-200'
+                              : 'text-emerald-700 hover:bg-emerald-50 border border-emerald-200'
+                          }`}
+                        >
+                          {u.status === 'Active' ? 'Deactivate' : 'Activate'}
+                        </button>
+                      </td>
                     </tr>
                   );
                 })}
@@ -422,7 +527,7 @@ export const UsersManagement: React.FC<UsersManagementProps> = ({
 
       {/* TAB 2: Granular Column & Field-Level Access Control */}
       {activeTab === 'columns' && (
-        <div className="bg-white rounded-xl border border-slate-200 shadow-xs overflow-hidden space-y-4 p-5">
+        <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden space-y-4 p-5">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-4">
             <div>
               <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
@@ -430,7 +535,7 @@ export const UsersManagement: React.FC<UsersManagementProps> = ({
                 <span>Field-Level Security & Column Permissions</span>
               </h3>
               <p className="text-xs text-slate-500 mt-0.5">
-                Admin can configure which columns each role can View (Active/Inactive) or Edit.
+                Admin can configure which columns each role can View or Edit in the CRM table.
               </p>
             </div>
 
@@ -482,21 +587,19 @@ export const UsersManagement: React.FC<UsersManagementProps> = ({
 
                     {/* Sales Executive */}
                     <td className="py-2 px-3 text-center">
-                      <div className="inline-flex items-center gap-2">
-                        <label title="Can View" className="flex items-center gap-1 cursor-pointer">
+                      <div className="flex items-center justify-center gap-2">
+                        <label className="flex items-center gap-1 cursor-pointer">
                           <input
                             type="checkbox"
-                            disabled={!isAdmin}
                             checked={col.viewRoles.includes('Sales Executive')}
                             onChange={() => handleToggleViewRole(col.columnKey, 'Sales Executive')}
                             className="rounded text-indigo-600 w-3.5 h-3.5"
                           />
                           <span className="text-[10px] text-slate-500">View</span>
                         </label>
-                        <label title="Can Edit" className="flex items-center gap-1 cursor-pointer">
+                        <label className="flex items-center gap-1 cursor-pointer">
                           <input
                             type="checkbox"
-                            disabled={!isAdmin}
                             checked={col.editRoles.includes('Sales Executive')}
                             onChange={() => handleToggleEditRole(col.columnKey, 'Sales Executive')}
                             className="rounded text-emerald-600 w-3.5 h-3.5"
@@ -508,21 +611,19 @@ export const UsersManagement: React.FC<UsersManagementProps> = ({
 
                     {/* Operations Engineer */}
                     <td className="py-2 px-3 text-center">
-                      <div className="inline-flex items-center gap-2">
-                        <label title="Can View" className="flex items-center gap-1 cursor-pointer">
+                      <div className="flex items-center justify-center gap-2">
+                        <label className="flex items-center gap-1 cursor-pointer">
                           <input
                             type="checkbox"
-                            disabled={!isAdmin}
                             checked={col.viewRoles.includes('Operations Engineer')}
                             onChange={() => handleToggleViewRole(col.columnKey, 'Operations Engineer')}
                             className="rounded text-indigo-600 w-3.5 h-3.5"
                           />
                           <span className="text-[10px] text-slate-500">View</span>
                         </label>
-                        <label title="Can Edit" className="flex items-center gap-1 cursor-pointer">
+                        <label className="flex items-center gap-1 cursor-pointer">
                           <input
                             type="checkbox"
-                            disabled={!isAdmin}
                             checked={col.editRoles.includes('Operations Engineer')}
                             onChange={() => handleToggleEditRole(col.columnKey, 'Operations Engineer')}
                             className="rounded text-emerald-600 w-3.5 h-3.5"
@@ -534,21 +635,19 @@ export const UsersManagement: React.FC<UsersManagementProps> = ({
 
                     {/* Accounts Manager */}
                     <td className="py-2 px-3 text-center">
-                      <div className="inline-flex items-center gap-2">
-                        <label title="Can View" className="flex items-center gap-1 cursor-pointer">
+                      <div className="flex items-center justify-center gap-2">
+                        <label className="flex items-center gap-1 cursor-pointer">
                           <input
                             type="checkbox"
-                            disabled={!isAdmin}
                             checked={col.viewRoles.includes('Accounts Manager')}
                             onChange={() => handleToggleViewRole(col.columnKey, 'Accounts Manager')}
                             className="rounded text-indigo-600 w-3.5 h-3.5"
                           />
                           <span className="text-[10px] text-slate-500">View</span>
                         </label>
-                        <label title="Can Edit" className="flex items-center gap-1 cursor-pointer">
+                        <label className="flex items-center gap-1 cursor-pointer">
                           <input
                             type="checkbox"
-                            disabled={!isAdmin}
                             checked={col.editRoles.includes('Accounts Manager')}
                             onChange={() => handleToggleEditRole(col.columnKey, 'Accounts Manager')}
                             className="rounded text-emerald-600 w-3.5 h-3.5"
@@ -560,21 +659,19 @@ export const UsersManagement: React.FC<UsersManagementProps> = ({
 
                     {/* Sales Manager */}
                     <td className="py-2 px-3 text-center">
-                      <div className="inline-flex items-center gap-2">
-                        <label title="Can View" className="flex items-center gap-1 cursor-pointer">
+                      <div className="flex items-center justify-center gap-2">
+                        <label className="flex items-center gap-1 cursor-pointer">
                           <input
                             type="checkbox"
-                            disabled={!isAdmin}
                             checked={col.viewRoles.includes('Sales Manager')}
                             onChange={() => handleToggleViewRole(col.columnKey, 'Sales Manager')}
                             className="rounded text-indigo-600 w-3.5 h-3.5"
                           />
                           <span className="text-[10px] text-slate-500">View</span>
                         </label>
-                        <label title="Can Edit" className="flex items-center gap-1 cursor-pointer">
+                        <label className="flex items-center gap-1 cursor-pointer">
                           <input
                             type="checkbox"
-                            disabled={!isAdmin}
                             checked={col.editRoles.includes('Sales Manager')}
                             onChange={() => handleToggleEditRole(col.columnKey, 'Sales Manager')}
                             className="rounded text-emerald-600 w-3.5 h-3.5"
@@ -593,13 +690,13 @@ export const UsersManagement: React.FC<UsersManagementProps> = ({
 
       {/* TAB 3: Activity Audit Log */}
       {activeTab === 'activity' && (
-        <div className="bg-white rounded-xl border border-slate-200 shadow-xs overflow-hidden">
-          <div className="p-4 border-b border-slate-200 bg-slate-50/50">
+        <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
+          <div className="p-4 border-b border-slate-200 bg-slate-50/70">
             <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider">
-              Real-Time Team Activity Stream
+              Real-Time Security & User Audit Log
             </h3>
             <p className="text-[11px] text-slate-500 mt-0.5">
-              Tracks changes made by users via email, stage transitions, payments, and Google Sheet sync.
+              Logs user logins, password updates, status changes, and stage transitions.
             </p>
           </div>
 
@@ -619,11 +716,6 @@ export const UsersManagement: React.FC<UsersManagementProps> = ({
                       </span>
                     </div>
                     <p className="text-xs text-slate-700 mt-0.5">{log.details}</p>
-                    {log.leadName && (
-                      <div className="text-[11px] text-indigo-600 font-medium mt-0.5">
-                        Lead: {log.leadId} - {log.leadName}
-                      </div>
-                    )}
                   </div>
                 </div>
 
@@ -636,21 +728,190 @@ export const UsersManagement: React.FC<UsersManagementProps> = ({
         </div>
       )}
 
-      {/* Add User Modal */}
-      {isAddUserModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-xs">
-          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden border border-slate-200">
+      {/* MODAL 1: Set Email & Password (Edit Credentials Modal) */}
+      {isEditUserModalOpen && selectedUserForEdit && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs">
+          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-lg overflow-hidden border border-slate-200 animate-in fade-in zoom-in-95 duration-150">
             <div className="px-6 py-4 border-b border-slate-200 bg-slate-50 flex items-center justify-between">
-              <h3 className="text-sm font-bold text-slate-900">Add New Team Member</h3>
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 bg-indigo-600 text-white rounded-xl">
+                  <KeyRound className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-slate-900">Set Email & Password</h3>
+                  <p className="text-[11px] text-slate-500">
+                    Update user credentials and role for <strong>{selectedUserForEdit.name}</strong>
+                  </p>
+                </div>
+              </div>
               <button
-                onClick={() => setIsAddUserModalOpen(false)}
-                className="text-slate-400 hover:text-slate-700 text-sm font-bold cursor-pointer"
+                onClick={() => setIsEditUserModalOpen(false)}
+                className="text-slate-400 hover:text-slate-700 p-1 rounded cursor-pointer"
               >
-                ✕
+                <X className="w-5 h-5" />
               </button>
             </div>
 
-            <form onSubmit={handleCreateUser} className="p-6 space-y-3 text-xs">
+            <form onSubmit={handleSaveEditUser} className="p-6 space-y-4 text-xs">
+              {editModalMessage && (
+                <div className="p-3 bg-rose-50 border border-rose-200 text-rose-700 rounded-xl text-xs flex items-center gap-2">
+                  <ShieldAlert className="w-4 h-4 shrink-0 text-rose-600" />
+                  <span>{editModalMessage}</span>
+                </div>
+              )}
+
+              {/* Name */}
+              <div>
+                <label className="block font-semibold text-slate-700 mb-1">Full Name *</label>
+                <input
+                  type="text"
+                  required
+                  value={editName}
+                  onChange={(e) => setEditName(e.target.value)}
+                  className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-slate-900 font-medium focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-600"
+                />
+              </div>
+
+              {/* Email Address */}
+              <div>
+                <label className="block font-semibold text-slate-700 mb-1">
+                  Login Email Address *
+                </label>
+                <div className="relative">
+                  <Mail className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="email"
+                    required
+                    value={editEmail}
+                    onChange={(e) => setEditEmail(e.target.value)}
+                    className="w-full pl-10 pr-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-slate-900 font-medium font-mono text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-600"
+                  />
+                </div>
+              </div>
+
+              {/* Password */}
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="font-semibold text-slate-700">
+                    Login Password *
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => setEditPassword(`dcpl${Math.floor(100 + Math.random() * 900)}`)}
+                    className="text-[11px] text-indigo-600 hover:text-indigo-800 font-medium cursor-pointer"
+                  >
+                    Generate Random
+                  </button>
+                </div>
+                <div className="relative">
+                  <Lock className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                  <input
+                    type={showEditPassword ? 'text' : 'password'}
+                    required
+                    value={editPassword}
+                    onChange={(e) => setEditPassword(e.target.value)}
+                    className="w-full pl-10 pr-10 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-slate-900 font-semibold font-mono text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-600"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowEditPassword(!showEditPassword)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-1 cursor-pointer"
+                  >
+                    {showEditPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
+                <p className="text-[11px] text-slate-400 mt-1">
+                  User will use this exact password on the Login Portal.
+                </p>
+              </div>
+
+              {/* Role & Status Row */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-semibold text-slate-700 mb-1">Role Assigned</label>
+                  <select
+                    value={editRole}
+                    onChange={(e) => setEditRole(e.target.value as UserRole)}
+                    className="w-full px-3 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-slate-900 font-medium cursor-pointer"
+                  >
+                    {ROLES.map((r) => (
+                      <option key={r} value={r}>
+                        {r}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block font-semibold text-slate-700 mb-1">Access Status</label>
+                  <select
+                    value={editStatus}
+                    onChange={(e) => setEditStatus(e.target.value as 'Active' | 'Inactive')}
+                    className="w-full px-3 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-slate-900 font-medium cursor-pointer"
+                  >
+                    <option value="Active">Active (Allowed)</option>
+                    <option value="Inactive">Inactive (Suspended)</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* Phone */}
+              <div>
+                <label className="block font-semibold text-slate-700 mb-1">Phone Number (Optional)</label>
+                <input
+                  type="tel"
+                  value={editPhone}
+                  onChange={(e) => setEditPhone(e.target.value)}
+                  placeholder="+91 9876543210"
+                  className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-slate-900 font-medium"
+                />
+              </div>
+
+              {/* Buttons */}
+              <div className="pt-3 flex items-center justify-end gap-2 border-t border-slate-200">
+                <button
+                  type="button"
+                  onClick={() => setIsEditUserModalOpen(false)}
+                  className="px-4 py-2 text-slate-600 hover:bg-slate-100 rounded-xl cursor-pointer font-medium"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-xl cursor-pointer shadow-xs flex items-center gap-1.5 transition-colors"
+                >
+                  <Save className="w-4 h-4" />
+                  <span>Update Credentials</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL 2: Add New Team Member & Password Modal */}
+      {isAddUserModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs">
+          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-md overflow-hidden border border-slate-200 animate-in fade-in zoom-in-95 duration-150">
+            <div className="px-6 py-4 border-b border-slate-200 bg-slate-50 flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 bg-indigo-600 text-white rounded-xl">
+                  <Plus className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-slate-900">Add New User & Password</h3>
+                  <p className="text-[11px] text-slate-500">Register new staff member for DCPL Solar CRM</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setIsAddUserModalOpen(false)}
+                className="text-slate-400 hover:text-slate-700 p-1 rounded cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleCreateUser} className="p-6 space-y-3.5 text-xs">
               <div>
                 <label className="block font-semibold text-slate-700 mb-1">Full Name *</label>
                 <input
@@ -659,61 +920,89 @@ export const UsersManagement: React.FC<UsersManagementProps> = ({
                   placeholder="e.g. Ramesh Kumar"
                   value={newUserName}
                   onChange={(e) => setNewUserName(e.target.value)}
-                  className="w-full px-3 py-2 border border-slate-300 rounded-lg"
+                  className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-slate-900 font-medium"
                 />
               </div>
 
               <div>
-                <label className="block font-semibold text-slate-700 mb-1">Google Email Address *</label>
-                <input
-                  type="email"
-                  required
-                  placeholder="e.g. ramesh@dcplsolar.com"
-                  value={newUserEmail}
-                  onChange={(e) => setNewUserEmail(e.target.value)}
-                  className="w-full px-3 py-2 border border-slate-300 rounded-lg"
-                />
+                <label className="block font-semibold text-slate-700 mb-1">Email Address *</label>
+                <div className="relative">
+                  <Mail className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="email"
+                    required
+                    placeholder="ramesh@dcplsolar.com"
+                    value={newUserEmail}
+                    onChange={(e) => setNewUserEmail(e.target.value)}
+                    className="w-full pl-10 pr-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-slate-900 font-medium font-mono text-xs"
+                  />
+                </div>
               </div>
 
               <div>
-                <label className="block font-semibold text-slate-700 mb-1">Role</label>
-                <select
-                  value={newUserRole}
-                  onChange={(e) => setNewUserRole(e.target.value as UserRole)}
-                  className="w-full px-3 py-2 border border-slate-300 rounded-lg bg-white"
-                >
-                  {ROLES.map((r) => (
-                    <option key={r} value={r}>
-                      {r}
-                    </option>
-                  ))}
-                </select>
+                <label className="block font-semibold text-slate-700 mb-1">Set Initial Password *</label>
+                <div className="relative">
+                  <Lock className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                  <input
+                    type={showNewPassword ? 'text' : 'password'}
+                    required
+                    placeholder="e.g. sales123"
+                    value={newUserPassword}
+                    onChange={(e) => setNewUserPassword(e.target.value)}
+                    className="w-full pl-10 pr-10 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-slate-900 font-semibold font-mono text-xs"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowNewPassword(!showNewPassword)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-1 cursor-pointer"
+                  >
+                    {showNewPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
               </div>
 
-              <div>
-                <label className="block font-semibold text-slate-700 mb-1">Phone Number</label>
-                <input
-                  type="tel"
-                  placeholder="+91 9876543210"
-                  value={newUserPhone}
-                  onChange={(e) => setNewUserPhone(e.target.value)}
-                  className="w-full px-3 py-2 border border-slate-300 rounded-lg"
-                />
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-semibold text-slate-700 mb-1">Role Assigned</label>
+                  <select
+                    value={newUserRole}
+                    onChange={(e) => setNewUserRole(e.target.value as UserRole)}
+                    className="w-full px-3 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-slate-900 font-medium cursor-pointer"
+                  >
+                    {ROLES.map((r) => (
+                      <option key={r} value={r}>
+                        {r}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block font-semibold text-slate-700 mb-1">Phone Number</label>
+                  <input
+                    type="tel"
+                    placeholder="+91 9876543210"
+                    value={newUserPhone}
+                    onChange={(e) => setNewUserPhone(e.target.value)}
+                    className="w-full px-3 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-slate-900 font-medium"
+                  />
+                </div>
               </div>
 
               <div className="pt-3 flex items-center justify-end gap-2 border-t border-slate-200">
                 <button
                   type="button"
                   onClick={() => setIsAddUserModalOpen(false)}
-                  className="px-3 py-1.5 text-slate-600 hover:bg-slate-100 rounded-lg cursor-pointer"
+                  className="px-4 py-2 text-slate-600 hover:bg-slate-100 rounded-xl cursor-pointer font-medium"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-1.5 bg-indigo-600 text-white font-medium rounded-lg hover:bg-indigo-700 cursor-pointer"
+                  className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-xl cursor-pointer shadow-xs flex items-center gap-1.5 transition-colors"
                 >
-                  Save User
+                  <Save className="w-4 h-4" />
+                  <span>Save User & Password</span>
                 </button>
               </div>
             </form>
@@ -723,3 +1012,5 @@ export const UsersManagement: React.FC<UsersManagementProps> = ({
     </div>
   );
 };
+
+export default UsersManagement;

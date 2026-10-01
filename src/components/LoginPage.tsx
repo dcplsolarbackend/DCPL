@@ -1,58 +1,72 @@
 import React, { useState } from 'react';
-import type { User, SheetSyncConfig } from '../types/crm';
+import type { User } from '../types/crm';
 import { 
   ShieldCheck, 
   Mail, 
   Lock, 
   AlertTriangle, 
   ArrowRight, 
-  KeyRound, 
   Eye, 
   EyeOff, 
-  RefreshCw,
-  Sparkles,
-  Smartphone,
-  CheckCircle2
+  RefreshCw 
 } from 'lucide-react';
 import { PWAInstallButton } from './PWAInstallButton';
-import { loadSyncConfig } from '../utils/storage';
+import { loadUsers } from '../utils/userStorage';
 
 interface LoginPageProps {
-  users: User[];
-  onLogin: (user: User) => void;
-  syncConfig?: SheetSyncConfig;
+  onLoginSuccess: (user: User) => void;
+  webAppUrl?: string;
+  users?: User[];
+  onLogin?: (user: User) => void; // alias
 }
 
-export const LoginPage: React.FC<LoginPageProps> = ({ 
-  users, 
-  onLogin,
-  syncConfig = loadSyncConfig()
-}) => {
+export function LoginPage({ 
+  onLoginSuccess, 
+  webAppUrl = '', 
+  users = loadUsers(),
+  onLogin 
+}: LoginPageProps) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const triggerLoginSuccess = (user: User) => {
+    if (onLoginSuccess) {
+      onLoginSuccess(user);
+    } else if (onLogin) {
+      onLogin(user);
+    }
+  };
+
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    setErrorMessage(null);
+    setLoading(true);
+    setError('');
 
     const cleanEmail = email.trim().toLowerCase();
     const cleanPassword = password.trim();
 
     if (!cleanEmail) {
-      setErrorMessage('Please enter your registered Google Email address.');
+      setError('Please enter your email address.');
+      setLoading(false);
       return;
     }
 
-    setIsLoading(true);
+    if (!cleanPassword) {
+      setError('Please enter your password.');
+      setLoading(false);
+      return;
+    }
 
     try {
-      // 1. If Google Sheets Web App URL is configured, try live Apps Script verification
-      if (syncConfig.webAppUrl && cleanPassword) {
+      // 1. Live Apps Script Auth API Call (if webAppUrl is provided)
+      let authenticatedUser: User | null = null;
+
+      if (webAppUrl) {
         try {
-          const response = await fetch(syncConfig.webAppUrl, {
+          const response = await fetch(webAppUrl, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -63,242 +77,185 @@ export const LoginPage: React.FC<LoginPageProps> = ({
           });
 
           if (response.ok) {
-            const data = await response.json();
-            if (data.status === 'success' && data.user) {
-              const sheetUser: User = {
-                id: data.user.id || `USR-${Date.now()}`,
-                name: data.user.name || cleanEmail.split('@')[0],
-                email: data.user.email || cleanEmail,
-                role: data.user.role || 'Sales Executive',
+            const resData = await response.json();
+
+            if (resData.status === 'success' && resData.user) {
+              if (resData.user.status === 'Inactive') {
+                setError('Account Suspended / Inactive. Contact Admin.');
+                setLoading(false);
+                return;
+              }
+
+              authenticatedUser = {
+                id: resData.user.id || `USR-${Date.now()}`,
+                name: resData.user.name || cleanEmail.split('@')[0],
+                email: resData.user.email || cleanEmail,
+                role: resData.user.role || 'Sales Executive',
                 status: 'Active',
+                phone: resData.user.phone || '',
                 lastActive: 'Just now',
                 createdAt: new Date().toISOString(),
               };
-              setIsLoading(false);
-              onLogin(sheetUser);
-              return;
-            } else if (data.status === 'error') {
-              setErrorMessage(data.message || 'Invalid Credentials in Google Sheet Users.');
-              setIsLoading(false);
+            } else if (resData.status === 'error') {
+              setError(resData.message || 'Invalid Email or Password');
+              setLoading(false);
               return;
             }
           }
         } catch (netErr) {
-          // If live sync is unreachable, fallback to local users list
-          console.warn('Live Google Sheet auth unreachable, checking local database:', netErr);
+          console.warn('Live Google Sheet auth unreachable, checking internal directory:', netErr);
         }
       }
 
-      // 2. Verify against local registered users database
-      const matchedUser = users.find((u) => u.email.toLowerCase() === cleanEmail);
+      // 2. Local Fallback Verification (Internal database / offline)
+      if (!authenticatedUser) {
+        const localList = users.length > 0 ? users : loadUsers();
+        const matched = localList.find((u) => u.email.toLowerCase() === cleanEmail);
 
-      if (!matchedUser) {
-        setErrorMessage(
-          'Access Denied: This email is not registered in DCPL Solar CRM. Contact Admin (dcplsolarbackend@gmail.com) to grant access.'
-        );
-        setIsLoading(false);
-        return;
+        if (!matched) {
+          setError('Access Denied: This email is not registered in DCPL Solar CRM. Contact Admin.');
+          setLoading(false);
+          return;
+        }
+
+        if (matched.status === 'Inactive') {
+          setError('Account Suspended / Inactive. Contact Admin.');
+          setLoading(false);
+          return;
+        }
+
+        if (matched.password && matched.password !== cleanPassword) {
+          setError('Invalid Email or Password');
+          setLoading(false);
+          return;
+        }
+
+        authenticatedUser = matched;
       }
 
-      if (matchedUser.status === 'Inactive') {
-        setErrorMessage(
-          'Account Suspended: Your access has been deactivated by the Administrator. Please contact management.'
-        );
-        setIsLoading(false);
-        return;
-      }
+      // Save session with 8-Hour Expiry Timestamp
+      const sessionData: User = {
+        ...authenticatedUser,
+        loggedInAt: Date.now(),
+        expiryAt: Date.now() + 8 * 60 * 60 * 1000, // 8 Hours Session Limit
+      };
 
-      // Password check if user provided a password
-      if (cleanPassword && matchedUser.password && matchedUser.password !== cleanPassword) {
-        setErrorMessage('Incorrect password for this user account.');
-        setIsLoading(false);
-        return;
-      }
-
-      // Login success
-      setIsLoading(false);
-      onLogin(matchedUser);
+      localStorage.setItem('dcpl_crm_user', JSON.stringify(sessionData));
+      triggerLoginSuccess(sessionData);
 
     } catch (err: any) {
-      setIsLoading(false);
-      setErrorMessage(err.message || 'An error occurred during authentication.');
+      setError(err.message || 'Authentication Failed. Please try again.');
+    } finally {
+      setLoading(false);
     }
-  };
-
-  const handleQuickDemoSelect = (user: User) => {
-    setErrorMessage(null);
-    if (user.status === 'Inactive') {
-      setErrorMessage(`User ${user.name} (${user.email}) is currently Inactive/Suspended.`);
-      return;
-    }
-    onLogin(user);
   };
 
   return (
-    <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center p-4 selection:bg-indigo-500 selection:text-white relative">
-      {/* Ambient Glow */}
+    <div className="min-h-screen bg-slate-900 flex items-center justify-center p-4 relative selection:bg-indigo-500 selection:text-white">
+      {/* Background ambient lighting */}
       <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-indigo-900/40 via-slate-900/80 to-slate-950 pointer-events-none" />
 
-      <div className="w-full max-w-md bg-white rounded-3xl shadow-2xl p-6 sm:p-8 space-y-5 border border-slate-100 relative z-10 animate-in fade-in zoom-in-95 duration-200">
+      <div className="bg-slate-800 rounded-2xl shadow-2xl p-6 sm:p-8 max-w-md w-full border border-slate-700 relative z-10">
         
-        {/* Logo & Header */}
-        <div className="text-center space-y-1.5">
-          <div className="w-14 h-14 bg-indigo-600 rounded-2xl flex items-center justify-center mx-auto text-white shadow-md shadow-indigo-600/30">
+        {/* Header */}
+        <div className="text-center mb-6">
+          <div className="w-14 h-14 bg-indigo-600 rounded-2xl flex items-center justify-center mx-auto text-white shadow-lg shadow-indigo-600/30 mb-3">
             <ShieldCheck className="w-8 h-8" />
           </div>
-          <h1 className="text-xl font-bold text-slate-900 tracking-tight">DCPL Solar CRM</h1>
-          <p className="text-xs text-slate-500">
-            Google Email & Role-Based Access Security Gate
-          </p>
+          <h1 className="text-2xl font-bold text-white tracking-tight">DCPL Solar CRM</h1>
+          <p className="text-slate-400 text-xs mt-1">Authorized Role-Based Access Only</p>
         </div>
 
-        {/* Login Form */}
-        <form onSubmit={handleSubmit} className="space-y-3.5">
-          {/* Email Field */}
+        {/* Error notification */}
+        {error && (
+          <div className="bg-rose-500/10 border border-rose-500/40 text-rose-300 px-4 py-3 rounded-xl text-xs mb-5 flex items-start gap-2 animate-in fade-in">
+            <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+            <span className="leading-snug">{error}</span>
+          </div>
+        )}
+
+        {/* Strictly Manual Credentials Form (NO Demo Buttons) */}
+        <form onSubmit={handleLogin} className="space-y-4">
           <div>
-            <label className="block text-xs font-semibold text-slate-700 mb-1">
-              Registered Google Email
+            <label className="block text-slate-300 text-xs font-semibold mb-1.5">
+              Registered Email Address
             </label>
             <div className="relative">
               <Mail className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
               <input
                 type="email"
                 required
-                placeholder="e.g. dcplsolarbackend@gmail.com"
+                autoComplete="email"
                 value={email}
                 onChange={(e) => {
                   setEmail(e.target.value);
-                  setErrorMessage(null);
+                  setError('');
                 }}
-                className="w-full pl-10 pr-3.5 py-2.5 text-xs bg-slate-50 border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-600 font-medium"
+                placeholder="name@dcplsolar.com"
+                className="w-full bg-slate-900/90 border border-slate-700 rounded-xl pl-10 pr-4 py-2.5 text-xs text-white placeholder:text-slate-500 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-colors"
               />
             </div>
           </div>
 
-          {/* Password Field */}
           <div>
-            <div className="flex items-center justify-between mb-1">
-              <label className="text-xs font-semibold text-slate-700">
-                Password
-              </label>
-              <span className="text-[10px] text-slate-400">
-                (Optional for registered Google email)
-              </span>
-            </div>
+            <label className="block text-slate-300 text-xs font-semibold mb-1.5">
+              Password
+            </label>
             <div className="relative">
               <Lock className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
               <input
                 type={showPassword ? 'text' : 'password'}
-                placeholder="Enter password"
+                required
+                autoComplete="current-password"
                 value={password}
                 onChange={(e) => {
                   setPassword(e.target.value);
-                  setErrorMessage(null);
+                  setError('');
                 }}
-                className="w-full pl-10 pr-10 py-2.5 text-xs bg-slate-50 border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-600 font-medium"
+                placeholder="••••••••"
+                className="w-full bg-slate-900/90 border border-slate-700 rounded-xl pl-10 pr-10 py-2.5 text-xs text-white placeholder:text-slate-500 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-colors"
               />
               <button
                 type="button"
                 onClick={() => setShowPassword(!showPassword)}
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-1 cursor-pointer"
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-200 p-1 cursor-pointer"
+                title={showPassword ? 'Hide password' : 'Show password'}
               >
-                {showPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
               </button>
             </div>
           </div>
 
-          {/* Error Message */}
-          {errorMessage && (
-            <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-rose-700 text-xs flex items-start gap-2 animate-in fade-in">
-              <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5 text-rose-600" />
-              <p className="leading-snug text-[11px]">{errorMessage}</p>
-            </div>
-          )}
-
-          {/* Submit Button */}
           <button
             type="submit"
-            disabled={isLoading}
-            className="w-full py-2.5 px-4 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-xl text-xs flex items-center justify-center gap-2 shadow-md shadow-indigo-600/20 transition-all cursor-pointer disabled:opacity-70"
+            disabled={loading}
+            className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-semibold py-3 px-4 rounded-xl text-xs flex items-center justify-center gap-2 shadow-lg shadow-indigo-600/30 transition-all cursor-pointer disabled:opacity-50 mt-2"
           >
-            {isLoading ? (
+            {loading ? (
               <>
                 <RefreshCw className="w-4 h-4 animate-spin" />
-                <span>Verifying credentials...</span>
+                <span>Authenticating with Server...</span>
               </>
             ) : (
               <>
-                <span>Secure Sign In</span>
+                <span>Sign In to Portal</span>
                 <ArrowRight className="w-4 h-4" />
               </>
             )}
           </button>
         </form>
 
-        {/* Step 2 Demonstration: Quick Role Selector */}
-        <div className="pt-3 border-t border-slate-100 space-y-2">
-          <div className="flex items-center justify-between text-[11px]">
-            <span className="font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1">
-              <Sparkles className="w-3.5 h-3.5 text-indigo-600" />
-              <span>Select Role to Test:</span>
-            </span>
-            <span className="text-[10px] text-slate-400">1-Click Login</span>
-          </div>
-
-          <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
-            {users.map((u) => {
-              const isInactive = u.status === 'Inactive';
-              return (
-                <button
-                  key={u.id}
-                  type="button"
-                  onClick={() => handleQuickDemoSelect(u)}
-                  className={`w-full p-2 rounded-xl text-left text-xs flex items-center justify-between transition-all border cursor-pointer ${
-                    isInactive
-                      ? 'bg-rose-50/40 border-rose-100 opacity-60 hover:opacity-80'
-                      : 'bg-slate-50 hover:bg-indigo-50/70 border-slate-200 hover:border-indigo-300'
-                  }`}
-                >
-                  <div className="truncate flex-1 min-w-0 pr-2">
-                    <div className="font-semibold text-slate-900 truncate flex items-center gap-1.5">
-                      <span>{u.name}</span>
-                      {isInactive && (
-                        <span className="text-[9px] px-1 py-0.2 bg-rose-100 text-rose-700 font-bold rounded">
-                          Inactive
-                        </span>
-                      )}
-                    </div>
-                    <div className="text-[10px] text-slate-500 font-mono truncate">{u.email}</div>
-                  </div>
-                  <div className="flex flex-col items-end shrink-0">
-                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded-md border ${
-                      u.role === 'Admin'
-                        ? 'bg-indigo-50 border-indigo-200 text-indigo-700'
-                        : u.role.includes('Sales')
-                        ? 'bg-emerald-50 border-emerald-200 text-emerald-700'
-                        : 'bg-amber-50 border-amber-200 text-amber-700'
-                    }`}>
-                      {u.role.split(' ')[0]}
-                    </span>
-                    <span className="text-[9px] text-slate-400 mt-0.5">
-                      {u.role === 'Admin' ? 'All 15 Stages' : u.role.includes('Sales') ? '5 Sales Stages' : 'Ops Stages'}
-                    </span>
-                  </div>
-                </button>
-              );
-            })}
-          </div>
-        </div>
-
-        {/* PWA & Mobile Installation */}
-        <div className="pt-2 text-center flex flex-col items-center gap-1.5 border-t border-slate-100">
+        {/* PWA App Install option */}
+        <div className="pt-5 mt-6 border-t border-slate-700/60 text-center flex flex-col items-center gap-1.5">
           <PWAInstallButton />
-          <p className="text-[10px] text-slate-400">
-            Installable on Android & iOS Home Screen
+          <p className="text-[11px] text-slate-500">
+            Install DCPL Solar CRM on Android, iOS, or Desktop
           </p>
         </div>
 
       </div>
     </div>
   );
-};
+}
+
+export default LoginPage;
