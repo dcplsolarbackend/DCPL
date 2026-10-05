@@ -599,6 +599,68 @@ export const GoogleSheetSyncModal: React.FC<GoogleSheetSyncModalProps> = ({
               )}
             </div>
 
+            {/* Automatic Background Sync Configuration */}
+            <div className="p-3.5 bg-emerald-50/70 border border-emerald-200 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="space-y-0.5">
+                <div className="flex items-center gap-2">
+                  <span
+                    className={`w-2.5 h-2.5 rounded-full ${
+                      syncConfig.autoSync && Boolean((webAppUrl || syncConfig.webAppUrl).trim())
+                        ? 'bg-emerald-500 animate-pulse'
+                        : 'bg-slate-400'
+                    }`}
+                  />
+                  <strong className="text-slate-900 font-bold text-xs">
+                    Automatic Background Sync (Auto-Sync)
+                  </strong>
+                </div>
+                <p className="text-[11px] text-slate-600">
+                  {syncConfig.autoSync && Boolean((webAppUrl || syncConfig.webAppUrl).trim())
+                    ? `Active — Automatically syncs with Google Sheet every ${syncConfig.syncIntervalMinutes || 1} min(s) and on every record change.`
+                    : 'Enter a valid Web App URL and keep Auto-Sync enabled for continuous live synchronization.'}
+                </p>
+              </div>
+
+              <div className="flex items-center gap-3 shrink-0">
+                <select
+                  value={syncConfig.syncIntervalMinutes || 1}
+                  onChange={(e) => {
+                    const mins = Number(e.target.value) || 1;
+                    onSaveSyncConfig({
+                      ...syncConfig,
+                      webAppUrl: webAppUrl.trim() || syncConfig.webAppUrl,
+                      syncIntervalMinutes: mins,
+                      autoSync: true,
+                    });
+                  }}
+                  className="px-2.5 py-1.5 bg-white border border-emerald-300 rounded-lg text-xs font-semibold text-slate-800"
+                >
+                  <option value={1}>Every 1 Min</option>
+                  <option value={2}>Every 2 Mins</option>
+                  <option value={5}>Every 5 Mins</option>
+                  <option value={10}>Every 10 Mins</option>
+                </select>
+
+                <label className="inline-flex items-center gap-1.5 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(syncConfig.autoSync)}
+                    onChange={(e) => {
+                      onSaveSyncConfig({
+                        ...syncConfig,
+                        webAppUrl: webAppUrl.trim() || syncConfig.webAppUrl,
+                        autoSync: e.target.checked,
+                      });
+                    }}
+                    className="w-4 h-4 rounded text-emerald-600 focus:ring-emerald-500"
+                  />
+                  <span className="font-semibold text-emerald-900">
+                    {syncConfig.autoSync ? 'Auto-Sync ON' : 'OFF'}
+                  </span>
+                </label>
+              </div>
+            </div>
+
             {/* Sheet Tabs Info */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
               <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 space-y-1">

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { 
   Lead, 
   PaymentRecord, 
@@ -59,19 +59,20 @@ import { RotateCcw, CheckCircle2, ShieldAlert } from 'lucide-react';
 const PUBLIC_APP_URL = 'https://ais-pre-5lwgbql5dcxvmg5zo645wl-134919990515.asia-southeast1.run.app';
 
 export default function App() {
-  const [leads, setLeads] = useState<Lead[]>([]);
-  const [payments, setPayments] = useState<PaymentRecord[]>([]);
-  const [users, setUsers] = useState<User[]>([]);
-  // Always require login on link open
-  const [currentUser, setCurrentUserState] = useState<User | null>(null);
-  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
+  const [leads, setLeads] = useState<Lead[]>(() => loadLeads());
+  const [payments, setPayments] = useState<PaymentRecord[]>(() => loadPayments());
+  const [users, setUsers] = useState<User[]>(() => loadUsers());
+  // Persist login on device across page refreshes for 5 days or until explicit logout
+  const [currentUser, setCurrentUserState] = useState<User | null>(() => getStoredUser(loadUsers()));
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(() => Boolean(getStoredUser(loadUsers())));
 
-  const [activityLogs, setActivityLogs] = useState<ActivityLog[]>([]);
-  const [notifications, setNotifications] = useState<InAppNotification[]>([]);
+  const [activityLogs, setActivityLogs] = useState<ActivityLog[]>(() => loadActivityLogs());
+  const [notifications, setNotifications] = useState<InAppNotification[]>(() => loadNotifications());
   const [currentView, setCurrentView] = useState<ViewMode>('dashboard');
   const [selectedStageFilter, setSelectedStageFilter] = useState<string>('All');
-  const [syncConfig, setSyncConfig] = useState<SheetSyncConfig>(loadSyncConfig());
+  const [syncConfig, setSyncConfig] = useState<SheetSyncConfig>(() => loadSyncConfig());
   const [isSyncing, setIsSyncing] = useState(false);
+  const isSyncingRef = useRef(false);
 
   // Modals state
   const [isProjectModalOpen, setIsProjectModalOpen] = useState(false);
@@ -93,19 +94,30 @@ export default function App() {
     }, 3500);
   };
 
-  // Load initial data on mount
+  // Load initial data on mount & check 5-day session validity
   useEffect(() => {
-    const loadedLeads = loadLeads();
-    setLeads(loadedLeads);
-
-    const loadedPayments = loadPayments();
-    setPayments(loadedPayments);
-
     const loadedUsers = loadUsers();
     setUsers(loadedUsers);
 
-    setActivityLogs(loadActivityLogs());
-    setNotifications(loadNotifications());
+    const storedUser = getStoredUser(loadedUsers);
+    if (storedUser) {
+      setCurrentUserState(storedUser);
+      setIsAuthenticated(true);
+    } else {
+      setCurrentUserState(null);
+      setIsAuthenticated(false);
+    }
+
+    // Periodically verify 5-day session expiry
+    const sessionCheckTimer = setInterval(() => {
+      const validUser = getStoredUser(loadUsers());
+      if (!validUser) {
+        setCurrentUserState(null);
+        setIsAuthenticated(false);
+      }
+    }, 60 * 1000);
+
+    return () => clearInterval(sessionCheckTimer);
   }, []);
 
   // Step 2: Role-based Filtered Leads
@@ -254,17 +266,23 @@ export default function App() {
     showToast(`Payment of ₹${newPay.amount.toLocaleString('en-IN')} recorded.`);
   };
 
-  // Two-way synchronization handler
-  const handleTriggerTwoWaySync = async () => {
+  // Two-way synchronization handler (supports both manual and silent background Auto-Sync)
+  const handleTriggerTwoWaySync = useCallback(async (silent = false) => {
     if (!currentUser) return;
-    if (!syncConfig.webAppUrl) {
-      showToast('Please enter your Google Apps Script URL first.');
+    const targetUrl = (syncConfig.webAppUrl || '').trim();
+    if (!targetUrl) {
+      if (!silent) {
+        showToast('Please enter your Google Apps Script URL first.');
+      }
       return;
     }
 
+    if (isSyncingRef.current) return;
+    isSyncingRef.current = true;
     setIsSyncing(true);
+
     try {
-      const res = await fetch(syncConfig.webAppUrl, { method: 'GET', mode: 'cors' });
+      const res = await fetch(targetUrl, { method: 'GET', mode: 'cors' });
       const json = await res.json();
 
       if (json && json.leads && Array.isArray(json.leads)) {
@@ -278,19 +296,27 @@ export default function App() {
           savePayments(json.payments);
         }
 
-        const log = logActivity({
-          userEmail: currentUser.email,
-          userName: currentUser.name,
-          userRole: currentUser.role,
-          action: 'SHEET_SYNC',
-          details: `2-Way sync pulled ${json.leads.length} projects & ${json.payments?.length || 0} payments from Sheet.`,
+        const nowIso = new Date().toISOString();
+        setSyncConfig((prev) => {
+          const updatedCfg = { ...prev, lastSyncedAt: nowIso };
+          saveSyncConfig(updatedCfg);
+          return updatedCfg;
         });
-        setActivityLogs((prev) => [log, ...prev]);
 
-        showToast(`Pulled ${json.leads.length} projects & ${json.payments?.length || 0} payments from Google Sheet!`);
-      } else {
-        // Fallback post
-        await fetch(syncConfig.webAppUrl, {
+        if (!silent) {
+          const log = logActivity({
+            userEmail: currentUser.email,
+            userName: currentUser.name,
+            userRole: currentUser.role,
+            action: 'SHEET_SYNC',
+            details: `2-Way sync pulled ${json.leads.length} projects & ${json.payments?.length || 0} payments from Sheet.`,
+          });
+          setActivityLogs((prev) => [log, ...prev]);
+          showToast(`Pulled ${json.leads.length} projects & ${json.payments?.length || 0} payments from Google Sheet!`);
+        }
+      } else if (!silent) {
+        // Fallback post on manual trigger
+        await fetch(targetUrl, {
           method: 'POST',
           mode: 'no-cors',
           headers: { 'Content-Type': 'application/json' },
@@ -304,30 +330,59 @@ export default function App() {
         showToast('Local database synced to Google Sheet.');
       }
     } catch (err) {
-      try {
-        await fetch(syncConfig.webAppUrl, {
-          method: 'POST',
-          mode: 'no-cors',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            action: 'syncBatch',
-            leads: leads,
-            payments: payments,
-            updatedBy: currentUser.email,
-          }),
-        });
-        showToast('Background sync dispatch sent to Google Sheet.');
-      } catch (postErr) {
-        showToast('Could not reach Google Apps Script Web App.');
+      if (!silent) {
+        try {
+          await fetch(targetUrl, {
+            method: 'POST',
+            mode: 'no-cors',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              action: 'syncBatch',
+              leads: leads,
+              payments: payments,
+              updatedBy: currentUser.email,
+            }),
+          });
+          showToast('Background sync dispatch sent to Google Sheet.');
+        } catch (postErr) {
+          showToast('Could not reach Google Apps Script Web App.');
+        }
       }
     } finally {
+      isSyncingRef.current = false;
       setIsSyncing(false);
-      setSyncConfig((prev) => ({
-        ...prev,
-        lastSyncedAt: new Date().toISOString(),
-      }));
     }
-  };
+  }, [currentUser, syncConfig.webAppUrl, leads, payments]);
+
+  // Automatic Background Sync (Auto-Sync when settings/URL are valid)
+  useEffect(() => {
+    const validUrl = (syncConfig.webAppUrl || '').trim();
+    if (!currentUser || !isAuthenticated || !validUrl || !syncConfig.autoSync) {
+      return;
+    }
+
+    // Immediate background sync on login / page load
+    handleTriggerTwoWaySync(true);
+
+    // Periodic background sync interval
+    const intervalMs = Math.max(1, syncConfig.syncIntervalMinutes || 1) * 60 * 1000;
+    const syncTimer = setInterval(() => {
+      handleTriggerTwoWaySync(true);
+    }, intervalMs);
+
+    // Also sync when tab becomes visible again
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        handleTriggerTwoWaySync(true);
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      clearInterval(syncTimer);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [currentUser?.email, isAuthenticated, syncConfig.webAppUrl, syncConfig.autoSync, syncConfig.syncIntervalMinutes, handleTriggerTwoWaySync]);
 
   const handleDeleteLead = (leadId: string) => {
     if (!currentUser) return;
@@ -553,6 +608,7 @@ export default function App() {
         onOpenShareModal={() => setIsShareModalOpen(true)}
         onLogout={handleLogout}
         isSyncing={isSyncing}
+        autoSyncActive={Boolean(syncConfig.webAppUrl && syncConfig.autoSync)}
       />
 
       {/* In-App Notifications Drawer */}
@@ -821,7 +877,7 @@ export default function App() {
           setSyncConfig(cfg);
           saveSyncConfig(cfg);
         }}
-        onTriggerTwoWaySync={handleTriggerTwoWaySync}
+        onTriggerTwoWaySync={() => handleTriggerTwoWaySync(false)}
         isSyncing={isSyncing}
         currentUser={currentUser}
       />

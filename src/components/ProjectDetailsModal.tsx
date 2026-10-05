@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Lead, PipelineStage, PaymentRecord, User } from '../types/crm';
+import { getQuotationPdfInfo } from '../utils/storage';
 import { 
   loadColumnPermissions, 
   canViewColumn, 
@@ -402,35 +403,71 @@ export const ProjectDetailsModal: React.FC<ProjectDetailsModalProps> = ({
                 </div>
               </div>
 
-              {/* Google Drive Folder Link */}
-              <div className="p-3 bg-indigo-50/70 border border-indigo-200 rounded-xl space-y-1.5">
-                <div className="flex items-center justify-between">
-                  <label className="font-semibold text-indigo-950 text-xs flex items-center gap-1.5">
-                    <FolderGit2 className="w-4 h-4 text-indigo-600" />
-                    <span>Customer Google Drive Folder (Site Photos, Quotations & Documents)</span>
-                  </label>
-                  {formData.driveFolderUrl && (
-                    <a
-                      href={formData.driveFolderUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg shadow-2xs"
-                    >
-                      <ExternalLink className="w-3 h-3" />
-                      <span>Open in Drive</span>
-                    </a>
-                  )}
+              {/* Google Drive Folder Link & View Quotation PDF Link */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div className="p-3 bg-indigo-50/70 border border-indigo-200 rounded-xl space-y-1.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <label className="font-semibold text-indigo-950 text-xs flex items-center gap-1.5">
+                      <FolderGit2 className="w-4 h-4 text-indigo-600 shrink-0" />
+                      <span>Google Drive Folder</span>
+                    </label>
+                    {formData.driveFolderUrl && (
+                      <a
+                        href={formData.driveFolderUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg shadow-2xs shrink-0"
+                      >
+                        <ExternalLink className="w-3 h-3" />
+                        <span>Open Drive</span>
+                      </a>
+                    )}
+                  </div>
+                  <input
+                    type="url"
+                    placeholder="https://drive.google.com/drive/folders/..."
+                    value={formData.driveFolderUrl || ''}
+                    onChange={(e) => setFormData({ ...formData, driveFolderUrl: e.target.value })}
+                    className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg font-mono text-[11px] text-slate-800"
+                  />
+                  <p className="text-[10px] text-slate-500">
+                    Customer site photos, bills & approval documents folder.
+                  </p>
                 </div>
-                <input
-                  type="url"
-                  placeholder="https://drive.google.com/drive/folders/..."
-                  value={formData.driveFolderUrl || ''}
-                  onChange={(e) => setFormData({ ...formData, driveFolderUrl: e.target.value })}
-                  className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg font-mono text-[11px] text-slate-800"
-                />
-                <p className="text-[10px] text-slate-500">
-                  Site survey photos, electricity bills, quotation PDFs, and approval documents are linked directly to this Google Drive folder.
-                </p>
+
+                {isViewable('quotationFile') && (
+                  <div className="p-3 bg-rose-50/70 border border-rose-200 rounded-xl space-y-1.5">
+                    <div className="flex items-center justify-between gap-2">
+                      <label className="font-semibold text-rose-950 text-xs flex items-center gap-1.5">
+                        <FileText className="w-4 h-4 text-rose-600 shrink-0" />
+                        <span>View Quotation PDF (Col 41)</span>
+                      </label>
+                      {getQuotationPdfInfo(formData) && (
+                        <a
+                          href={getQuotationPdfInfo(formData)!.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-semibold text-white bg-rose-600 hover:bg-rose-700 rounded-lg shadow-2xs shrink-0"
+                        >
+                          <FileText className="w-3 h-3" />
+                          <span>View PDF</span>
+                          <ExternalLink className="w-3 h-3" />
+                        </a>
+                      )}
+                    </div>
+                    <input
+                      type="text"
+                      disabled={!isEditable('quotationFile')}
+                      placeholder="https://drive.google.com/... or Quotation PDF/..."
+                      value={formData.quotationFile || formData.quotationFileApproved || ''}
+                      onChange={(e) => setFormData({ ...formData, quotationFile: e.target.value })}
+                      className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg font-mono text-[11px] text-slate-800 disabled:bg-slate-100"
+                    />
+                    <p className="text-[10px] text-slate-500">
+                      Direct Quotation PDF link or Google Drive PDF path from sheet.
+                    </p>
+                  </div>
+                )}
               </div>
 
               {/* Financial Balance Summary */}
@@ -759,23 +796,85 @@ export const ProjectDetailsModal: React.FC<ProjectDetailsModalProps> = ({
                 Documents & Google Drive PDF files stored in Google Sheet (Cols 26-30 & Col 41).
               </p>
 
-              <div>
-                <label className="block font-semibold text-slate-700 mb-1">Quotation PDF File (Col 41)</label>
+              <div className="p-3.5 bg-rose-50/50 border border-rose-200 rounded-xl space-y-2">
+                <div className="flex items-center justify-between">
+                  <label className="block font-bold text-rose-950 text-xs flex items-center gap-1.5">
+                    <FileText className="w-4 h-4 text-rose-600" />
+                    <span>View Quotation PDF File (Col 41)</span>
+                  </label>
+                  {getQuotationPdfInfo(formData) && (
+                    <a
+                      href={getQuotationPdfInfo(formData)!.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1.5 px-3 py-1 bg-rose-600 hover:bg-rose-700 text-white font-semibold rounded-lg text-[11px] shadow-2xs"
+                    >
+                      <FileText className="w-3.5 h-3.5" />
+                      <span>Open Quotation PDF</span>
+                      <ExternalLink className="w-3 h-3" />
+                    </a>
+                  )}
+                </div>
                 <input
                   type="text"
-                  placeholder="e.g. Quotation PDF/Quo_Mr. Ram Kishore_97e43cff.pdf"
-                  value={formData.quotationFile}
+                  placeholder="e.g. https://drive.google.com/file/d/... or Quotation PDF/Quo_Mr. Ram Kishore_97e43cff.pdf"
+                  value={formData.quotationFile || ''}
                   onChange={(e) => setFormData({ ...formData, quotationFile: e.target.value })}
+                  className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg font-mono text-[11px]"
+                />
+              </div>
+
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="block font-semibold text-slate-700">Quotation File Approved (Col 27)</label>
+                  {formData.quotationFileApproved && (
+                    <a
+                      href={
+                        /^https?:\/\//i.test(formData.quotationFileApproved)
+                          ? formData.quotationFileApproved
+                          : `https://drive.google.com/drive/search?q=${encodeURIComponent(formData.quotationFileApproved.split('/').pop() || formData.quotationFileApproved)}`
+                      }
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1 text-[11px] font-semibold text-indigo-600 hover:text-indigo-800"
+                    >
+                      <span>View File</span>
+                      <ExternalLink className="w-3 h-3" />
+                    </a>
+                  )}
+                </div>
+                <input
+                  type="text"
+                  placeholder="Approved quotation file link or path"
+                  value={formData.quotationFileApproved || ''}
+                  onChange={(e) => setFormData({ ...formData, quotationFileApproved: e.target.value })}
                   className="w-full px-3 py-2 border border-slate-300 rounded-lg font-mono text-[11px]"
                 />
               </div>
 
               <div>
-                <label className="block font-semibold text-slate-700 mb-1">Project Sheet Approved PDF (Col 28)</label>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="block font-semibold text-slate-700">Project Sheet Approved PDF (Col 28)</label>
+                  {formData.projectSheetApproved && (
+                    <a
+                      href={
+                        /^https?:\/\//i.test(formData.projectSheetApproved)
+                          ? formData.projectSheetApproved
+                          : `https://drive.google.com/drive/search?q=${encodeURIComponent(formData.projectSheetApproved.split('/').pop() || formData.projectSheetApproved)}`
+                      }
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1 text-[11px] font-semibold text-indigo-600 hover:text-indigo-800"
+                    >
+                      <span>View Approved Sheet</span>
+                      <ExternalLink className="w-3 h-3" />
+                    </a>
+                  )}
+                </div>
                 <input
                   type="text"
                   placeholder="e.g. Main Project Sheet_Files_/97e43cff.Project Sheet Approved.pdf"
-                  value={formData.projectSheetApproved}
+                  value={formData.projectSheetApproved || ''}
                   onChange={(e) => setFormData({ ...formData, projectSheetApproved: e.target.value })}
                   className="w-full px-3 py-2 border border-slate-300 rounded-lg font-mono text-[11px]"
                 />

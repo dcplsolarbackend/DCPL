@@ -7,6 +7,9 @@ const LEGACY_USER_KEY = 'crm_current_user_v2';
 const ACTIVITY_STORAGE_KEY = 'crm_activity_logs_v2';
 const NOTIFICATIONS_KEY = 'crm_notifications_v2';
 
+// 5 Days Session Duration (in milliseconds)
+export const SESSION_DURATION_MS = 5 * 24 * 60 * 60 * 1000;
+
 export function loadUsers(): User[] {
   try {
     const raw = localStorage.getItem(USERS_STORAGE_KEY);
@@ -31,19 +34,25 @@ export function saveUsers(users: User[]): void {
 
 /**
  * Returns currently logged in user from localStorage.
- * If not logged in or inactive, returns null.
+ * Persists across page refreshes and browser restarts for 5 days or until explicit logout.
  */
 export function getStoredUser(users: User[] = loadUsers()): User | null {
   try {
     const raw = localStorage.getItem(CURRENT_USER_KEY) || localStorage.getItem(LEGACY_USER_KEY);
     if (raw) {
       const parsed = JSON.parse(raw);
-      // Session Expiry Check (8 hours limit)
+      // Session Expiry Check (5 days limit)
       if (parsed.expiryAt && Date.now() > parsed.expiryAt) {
         localStorage.removeItem(CURRENT_USER_KEY);
         localStorage.removeItem(LEGACY_USER_KEY);
         return null;
       }
+
+      const loggedInAt = parsed.loggedInAt || Date.now();
+      const expiryAt = parsed.expiryAt && parsed.expiryAt - loggedInAt >= SESSION_DURATION_MS
+        ? parsed.expiryAt
+        : loggedInAt + SESSION_DURATION_MS;
+
       const match = users.find((u) => u.email.toLowerCase() === (parsed.email || '').toLowerCase());
       if (match) {
         if (match.status !== 'Active') {
@@ -51,10 +60,20 @@ export function getStoredUser(users: User[] = loadUsers()): User | null {
           localStorage.removeItem(LEGACY_USER_KEY);
           return null;
         }
-        return { ...match, ...parsed };
+        const mergedUser: User = {
+          ...parsed,
+          ...match,
+          loggedInAt,
+          expiryAt,
+        };
+        return mergedUser;
       }
-      if (parsed.status === 'Active') {
-        return parsed;
+      if (parsed.status !== 'Inactive') {
+        return {
+          ...parsed,
+          loggedInAt,
+          expiryAt,
+        };
       }
     }
   } catch (e) {
@@ -70,8 +89,14 @@ export function getCurrentUser(users: User[]): User | null {
 export function setStoredUser(user: User | null): void {
   try {
     if (user) {
-      localStorage.setItem(CURRENT_USER_KEY, JSON.stringify(user));
-      localStorage.setItem(LEGACY_USER_KEY, JSON.stringify(user));
+      const now = Date.now();
+      const userWithSession: User = {
+        ...user,
+        loggedInAt: user.loggedInAt || now,
+        expiryAt: user.expiryAt || now + SESSION_DURATION_MS,
+      };
+      localStorage.setItem(CURRENT_USER_KEY, JSON.stringify(userWithSession));
+      localStorage.setItem(LEGACY_USER_KEY, JSON.stringify(userWithSession));
     } else {
       localStorage.removeItem(CURRENT_USER_KEY);
       localStorage.removeItem(LEGACY_USER_KEY);

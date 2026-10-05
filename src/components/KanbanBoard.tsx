@@ -1,15 +1,16 @@
 import React, { useMemo } from 'react';
 import type { Lead, PipelineStage, User } from '../types/crm';
 import { getVisibleStagesForRole } from '../constants/pipeline';
+import { getQuotationPdfInfo } from '../utils/storage';
 import { 
   ArrowLeft, 
   ArrowRight, 
   MessageSquare, 
   Phone, 
   Calendar, 
-  IndianRupee, 
   Edit3,
-  User as UserIcon
+  User as UserIcon,
+  FileText
 } from 'lucide-react';
 
 interface KanbanBoardProps {
@@ -187,6 +188,18 @@ export const KanbanBoard: React.FC<KanbanBoardProps> = ({
                           >
                             <Phone className="w-3 h-3" />
                           </a>
+                          {getQuotationPdfInfo(lead) && (
+                            <a
+                              href={getQuotationPdfInfo(lead)!.url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              title={`View Quotation PDF: ${getQuotationPdfInfo(lead)!.fileName}`}
+                              className="inline-flex items-center gap-0.5 px-1.5 py-0.5 text-[10px] font-semibold text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded transition-colors"
+                            >
+                              <FileText className="w-2.5 h-2.5 text-rose-600" />
+                              <span>PDF</span>
+                            </a>
+                          )}
                         </div>
 
                         <div className="flex items-center gap-0.5">

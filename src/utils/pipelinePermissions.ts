@@ -11,6 +11,7 @@ export const FIELD_DEFINITIONS: { key: string; label: string; category: string }
   { key: 'source', label: 'Lead Source', category: 'Basic Info' },
   { key: 'salesPerson', label: 'Sales Person (Name/Email)', category: 'Basic Info' },
   { key: 'driveFolderUrl', label: 'Google Drive Folder', category: 'Documents' },
+  { key: 'quotationFile', label: 'View Quotation PDF Link', category: 'Documents' },
   { key: 'followUpDate', label: 'Follow Up Date', category: 'Dates' },
   { key: 'convertedDate', label: 'Converted Date', category: 'Dates' },
   { key: 'quotationAmount', label: 'Quotation Amount', category: 'Commercials' },

@@ -25,6 +25,7 @@ interface TopNavProps {
   onOpenShareModal: () => void;
   onLogout: () => void;
   isSyncing?: boolean;
+  autoSyncActive?: boolean;
 }
 
 export const TopNav: React.FC<TopNavProps> = ({
@@ -40,6 +41,7 @@ export const TopNav: React.FC<TopNavProps> = ({
   onOpenShareModal,
   onLogout,
   isSyncing,
+  autoSyncActive,
 }) => {
   return (
     <header className="sticky top-0 z-30 flex h-14 sm:h-16 w-full items-center justify-between border-b border-slate-200 bg-white/95 px-3 sm:px-6 backdrop-blur-md">
@@ -139,11 +141,24 @@ export const TopNav: React.FC<TopNavProps> = ({
         {/* Google Sheet Sync Button */}
         <button
           onClick={onOpenSyncModal}
-          title="Google Apps Script two-way sync"
-          className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors whitespace-nowrap cursor-pointer"
+          title={autoSyncActive ? 'Auto-Sync Active (Google Sheets Connected)' : 'Configure Google Sheet Auto-Sync'}
+          className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-lg transition-colors whitespace-nowrap cursor-pointer border ${
+            autoSyncActive
+              ? 'text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border-emerald-200'
+              : 'text-slate-700 bg-slate-100 hover:bg-slate-200 border-transparent'
+          }`}
         >
-          <RefreshCw className={`w-3.5 h-3.5 text-slate-500 ${isSyncing ? 'animate-spin text-indigo-600' : ''}`} />
-          <span className="hidden sm:inline">Sync</span>
+          <span
+            className={`w-2 h-2 rounded-full shrink-0 ${
+              isSyncing
+                ? 'bg-indigo-600 animate-ping'
+                : autoSyncActive
+                ? 'bg-emerald-500 animate-pulse'
+                : 'bg-slate-400'
+            }`}
+          />
+          <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin text-indigo-600' : autoSyncActive ? 'text-emerald-600' : 'text-slate-500'}`} />
+          <span className="hidden sm:inline">{autoSyncActive ? 'Auto-Sync' : 'Sync'}</span>
         </button>
 
         {/* Notifications Bell */}

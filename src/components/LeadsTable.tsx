@@ -1,19 +1,20 @@
 import React, { useState, useMemo } from 'react';
 import { Lead, PipelineStage, User } from '../types/crm';
+import { getQuotationPdfInfo } from '../utils/storage';
+import { loadColumnPermissions, canViewColumn } from '../utils/permissionStorage';
+import { ALL_STAGES } from '../constants/stages';
 import { 
   Search, 
   MessageSquare, 
   Phone, 
-  Mail, 
   Edit3, 
   Trash2, 
   AlertCircle,
-  Calendar,
   Check,
   Zap,
-  Info,
   ExternalLink,
-  FolderGit2
+  FolderGit2,
+  FileText
 } from 'lucide-react';
 
 interface LeadsTableProps {
@@ -25,25 +26,6 @@ interface LeadsTableProps {
   selectedStageFilter: string;
   currentUser?: User;
 }
-
-const ALL_STAGES: PipelineStage[] = [
-  'Lead',
-  'New Leads',
-  'Follow Up',
-  'Converted',
-  'Quotation',
-  'Documentation',
-  'Registration',
-  'Loan',
-  'Survey',
-  'Material Dispatch',
-  'Installation',
-  'Inspection',
-  'Net Meter',
-  'Connection',
-  'Complete',
-  'Lost',
-];
 
 export const LeadsTable: React.FC<LeadsTableProps> = ({
   leads,
@@ -59,7 +41,8 @@ export const LeadsTable: React.FC<LeadsTableProps> = ({
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
   const [statusDropdownOpen, setStatusDropdownOpen] = useState<string | null>(null);
 
-  const todayStr = new Date().toISOString().split('T')[0];
+  const columnRules = useMemo(() => loadColumnPermissions(), []);
+  const canSeeQuotationPdf = !currentUser || canViewColumn('quotationFile', currentUser.role, columnRules);
   const canDelete = !currentUser || currentUser.role === 'Admin' || currentUser.role === 'Sales Manager';
 
   const filteredAndSortedLeads = useMemo(() => {
@@ -208,6 +191,7 @@ export const LeadsTable: React.FC<LeadsTableProps> = ({
               <th className="py-3 px-4">Phone & City</th>
               <th className="py-3 px-4">Sales Rep</th>
               <th className="py-3 px-4">Status (Stage)</th>
+              {canSeeQuotationPdf && <th className="py-3 px-4">View Quotation PDF</th>}
               <th className="py-3 px-4 text-right">Deal (₹)</th>
               <th className="py-3 px-4 text-right">Received (₹)</th>
               <th className="py-3 px-4 text-right">Due (₹)</th>
@@ -217,7 +201,7 @@ export const LeadsTable: React.FC<LeadsTableProps> = ({
           <tbody className="divide-y divide-slate-100 text-xs">
             {filteredAndSortedLeads.length === 0 ? (
               <tr>
-                <td colSpan={9} className="py-12 text-center text-slate-400">
+                <td colSpan={canSeeQuotationPdf ? 10 : 9} className="py-12 text-center text-slate-400">
                   <div className="flex flex-col items-center justify-center">
                     <AlertCircle className="w-8 h-8 text-slate-300 mb-2" />
                     <p className="text-sm font-medium text-slate-600">No projects found in this view</p>
@@ -229,6 +213,8 @@ export const LeadsTable: React.FC<LeadsTableProps> = ({
               </tr>
             ) : (
               filteredAndSortedLeads.map((lead) => {
+                const pdfInfo = getQuotationPdfInfo(lead);
+
                 return (
                   <tr
                     key={lead.leadId}
@@ -314,6 +300,43 @@ export const LeadsTable: React.FC<LeadsTableProps> = ({
                         )}
                       </div>
                     </td>
+
+                    {/* View Quotation PDF Column */}
+                    {canSeeQuotationPdf && (
+                      <td className="py-3 px-4 whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
+                        {pdfInfo ? (
+                          <div className="flex flex-col items-start gap-0.5">
+                            <a
+                              href={pdfInfo.url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              title={`Open Quotation PDF: ${pdfInfo.rawValue}`}
+                              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 font-semibold text-[11px] transition-colors shadow-2xs"
+                            >
+                              <FileText className="w-3.5 h-3.5 text-rose-600 shrink-0" />
+                              <span>View PDF</span>
+                              <ExternalLink className="w-3 h-3 opacity-70 shrink-0" />
+                            </a>
+                            <span
+                              className="text-[10px] text-slate-400 font-mono truncate max-w-[140px]"
+                              title={pdfInfo.rawValue}
+                            >
+                              {pdfInfo.fileName}
+                            </span>
+                          </div>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => onEditLead(lead)}
+                            title="Add Quotation PDF Link"
+                            className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-[11px] text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 border border-dashed border-slate-200 hover:border-indigo-200 transition-colors cursor-pointer"
+                          >
+                            <FileText className="w-3 h-3" />
+                            <span>+ Link PDF</span>
+                          </button>
+                        )}
+                      </td>
+                    )}
 
                     {/* Deal Amount */}
                     <td className="py-3 px-4 text-right whitespace-nowrap font-mono tabular-nums text-slate-900 font-medium">

@@ -11,7 +11,7 @@ import {
   RefreshCw 
 } from 'lucide-react';
 import { PWAInstallButton } from './PWAInstallButton';
-import { loadUsers } from '../utils/userStorage';
+import { loadUsers, setStoredUser, SESSION_DURATION_MS } from '../utils/userStorage';
 
 interface LoginPageProps {
   onLoginSuccess: (user: User) => void;
@@ -133,14 +133,15 @@ export function LoginPage({
         authenticatedUser = matched;
       }
 
-      // Save session with 8-Hour Expiry Timestamp
+      // Save session with 5-Day Expiry Timestamp (persists across page refreshes)
+      const now = Date.now();
       const sessionData: User = {
         ...authenticatedUser,
-        loggedInAt: Date.now(),
-        expiryAt: Date.now() + 8 * 60 * 60 * 1000, // 8 Hours Session Limit
+        loggedInAt: now,
+        expiryAt: now + SESSION_DURATION_MS, // 5 Days Session Limit
       };
 
-      localStorage.setItem('dcpl_crm_user', JSON.stringify(sessionData));
+      setStoredUser(sessionData);
       triggerLoginSuccess(sessionData);
 
     } catch (err: any) {

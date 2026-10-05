@@ -64,29 +64,86 @@ export function loadSyncConfig(): SheetSyncConfig {
   try {
     const raw = localStorage.getItem(CONFIG_KEY);
     if (raw) {
-      return JSON.parse(raw);
+      const parsed = JSON.parse(raw);
+      const fallbackUrl = localStorage.getItem('dcpl_apps_script_url') || '';
+      const webAppUrl = parsed.webAppUrl || fallbackUrl;
+      return {
+        webAppUrl,
+        spreadsheetId: parsed.spreadsheetId || '',
+        mainSheetName: parsed.mainSheetName || 'Main Project Sheet',
+        paymentSheetName: parsed.paymentSheetName || 'Payment Sheet',
+        driveFolderId: parsed.driveFolderId || '',
+        autoSync: parsed.autoSync !== undefined ? Boolean(parsed.autoSync) : true,
+        lastSyncedAt: parsed.lastSyncedAt || null,
+        syncIntervalMinutes: parsed.syncIntervalMinutes || 1,
+      };
     }
   } catch (e) {
     console.error(e);
   }
+  const savedScriptUrl = typeof window !== 'undefined' ? localStorage.getItem('dcpl_apps_script_url') || '' : '';
   return {
-    webAppUrl: '',
+    webAppUrl: savedScriptUrl,
     spreadsheetId: '',
     mainSheetName: 'Main Project Sheet',
     paymentSheetName: 'Payment Sheet',
     driveFolderId: '',
-    autoSync: false,
+    autoSync: true,
     lastSyncedAt: null,
-    syncIntervalMinutes: 2,
+    syncIntervalMinutes: 1,
   };
 }
 
 export function saveSyncConfig(cfg: SheetSyncConfig): void {
   try {
     localStorage.setItem(CONFIG_KEY, JSON.stringify(cfg));
+    if (cfg.webAppUrl) {
+      localStorage.setItem('dcpl_apps_script_url', cfg.webAppUrl.trim());
+    }
   } catch (e) {
     console.error(e);
   }
+}
+
+export interface QuotationPdfInfo {
+  url: string;
+  fileName: string;
+  rawValue: string;
+  isDirectUrl: boolean;
+}
+
+/**
+ * Resolves the Quotation PDF link (from Col 41 quotationFile or Col 27 quotationFileApproved).
+ * Supports both direct https:// links and Google Drive / AppSheet relative file paths.
+ */
+export function getQuotationPdfInfo(lead: Partial<Lead> | null | undefined): QuotationPdfInfo | null {
+  if (!lead) return null;
+  const raw = (lead.quotationFile || lead.quotationFileApproved || '').trim();
+  if (!raw) return null;
+
+  const isDirectUrl = /^https?:\/\//i.test(raw);
+  const parts = raw.split('/');
+  const lastPart = parts[parts.length - 1] || raw;
+  const fileName = decodeURIComponent(lastPart).replace(/\?.*$/, '') || 'Quotation.pdf';
+
+  if (isDirectUrl) {
+    return {
+      url: raw,
+      fileName,
+      rawValue: raw,
+      isDirectUrl: true,
+    };
+  }
+
+  const searchQuery = encodeURIComponent(lastPart);
+  const driveUrl = `https://drive.google.com/drive/search?q=${searchQuery}`;
+
+  return {
+    url: driveUrl,
+    fileName,
+    rawValue: raw,
+    isDirectUrl: false,
+  };
 }
 
 export const MAIN_SHEET_HEADERS = [
