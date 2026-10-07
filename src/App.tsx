@@ -39,6 +39,7 @@ import {
   isSales, 
   isOperations 
 } from './constants/pipeline';
+import { validateLeadForStage } from './utils/pipelinePermissions';
 import { TopNav } from './components/TopNav';
 import { Sidebar } from './components/Sidebar';
 import { LeadsTable } from './components/LeadsTable';
@@ -424,10 +425,19 @@ export default function App() {
       lastModifiedTime: new Date().toLocaleString(),
     };
 
+    // Check stage-wise mandatory fields before advancing stage
+    const validation = validateLeadForStage(updatedLead, newStatus);
+    if (!validation.isValid) {
+      setEditingLead(updatedLead);
+      setIsProjectModalOpen(true);
+      showToast(`Fill required columns for "${newStatus}": ${validation.missingLabels.join(', ')}`);
+      return;
+    }
+
     setLeads((prev) => {
       const updated = prev.map((l) => (l.leadId === leadId ? updatedLead : l));
       saveLeads(updated);
-      showToast(`Moved ${target.customerName} to "${newStatus}".`);
+      showToast(`Moved ${target.customerName || target.phone} to "${newStatus}".`);
       return updated;
     });
 

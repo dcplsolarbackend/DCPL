@@ -2,41 +2,65 @@ import type { PipelineStage, UserRole, User, Lead } from '../types/crm';
 import { ALL_STAGES } from '../constants/stages';
 
 const STAGE_PERMISSIONS_STORAGE_KEY = 'crm_stage_permissions_v1';
-const STAGE_MANDATORY_STORAGE_KEY = 'crm_stage_mandatory_rules_v1';
+const STAGE_MANDATORY_STORAGE_KEY = 'crm_stage_mandatory_rules_v3';
 
-export const FIELD_DEFINITIONS: { key: string; label: string; category: string }[] = [
-  { key: 'customerName', label: 'Customer Name', category: 'Basic Info' },
-  { key: 'phone', label: 'Contact Phone', category: 'Basic Info' },
-  { key: 'address', label: 'Site Address', category: 'Basic Info' },
-  { key: 'source', label: 'Lead Source', category: 'Basic Info' },
-  { key: 'salesPerson', label: 'Sales Person (Name/Email)', category: 'Basic Info' },
-  { key: 'driveFolderUrl', label: 'Google Drive Folder', category: 'Documents' },
-  { key: 'quotationFile', label: 'View Quotation PDF Link', category: 'Documents' },
-  { key: 'followUpDate', label: 'Follow Up Date', category: 'Dates' },
-  { key: 'convertedDate', label: 'Converted Date', category: 'Dates' },
-  { key: 'quotationAmount', label: 'Quotation Amount', category: 'Commercials' },
-  { key: 'quotationDate', label: 'Quotation Date', category: 'Dates' },
-  { key: 'systemCapacity', label: 'Plant Capacity (kW)', category: 'Technical' },
-  { key: 'dealAmount', label: 'Deal Amount (₹)', category: 'Commercials' },
-  { key: 'documentationDate', label: 'Documentation Date', category: 'Dates' },
-  { key: 'registrationDate', label: 'Registration Date', category: 'Operations' },
-  { key: 'consumerNumber', label: 'Consumer Number', category: 'Operations' },
-  { key: 'loanDate', label: 'Loan Approval Date', category: 'Commercials' },
-  { key: 'loanStatus', label: 'Loan Status', category: 'Commercials' },
-  { key: 'surveyDate', label: 'Site Survey Date', category: 'Operations' },
-  { key: 'surveyorName', label: 'Surveyor Engineer', category: 'Operations' },
-  { key: 'mDispatchDate', label: 'Material Dispatch Date', category: 'Operations' },
-  { key: 'solarModuleModel', label: 'Panel Brand & Model', category: 'Technical' },
-  { key: 'inverterModel', label: 'Inverter Brand & Model', category: 'Technical' },
-  { key: 'installationDate', label: 'Installation Date', category: 'Operations' },
-  { key: 'installerName', label: 'Installer Name / Lead', category: 'Operations' },
-  { key: 'structure', label: 'Structure Type', category: 'Technical' },
-  { key: 'wiring', label: 'Wiring Length (Mtr)', category: 'Technical' },
-  { key: 'inspectionDate', label: 'Discom Inspection Date', category: 'Operations' },
-  { key: 'netMeterDate', label: 'Net Meter Date', category: 'Operations' },
-  { key: 'connectionDate', label: 'Grid Connection Date', category: 'Operations' },
-  { key: 'paymentReceived', label: 'Payment Received (₹)', category: 'Commercials' },
-  { key: 'notes', label: 'Remarks / Notes', category: 'Basic Info' },
+export interface StageFieldDefinition {
+  key: keyof Lead & string;
+  label: string;
+  category: 'Basic Info' | 'Commercials' | 'Technical' | 'Dates' | 'Operations' | 'Documents';
+  placeholder?: string;
+  inputType?: 'text' | 'number' | 'date' | 'url' | 'textarea' | 'select';
+}
+
+export const FIELD_DEFINITIONS: StageFieldDefinition[] = [
+  // Basic Info (Lead & Sales)
+  { key: 'salesPerson', label: 'Sales Person Name (Col 20)', category: 'Basic Info', inputType: 'select' },
+  { key: 'phone', label: 'Phone No (Col 17)', category: 'Basic Info', placeholder: 'e.g. 7055294686' },
+  { key: 'source', label: 'Lead Source (Col 19)', category: 'Basic Info', placeholder: 'Field, On Call, JD Enquiry, Referral...' },
+  { key: 'customerName', label: 'Customer Name (Col 16)', category: 'Basic Info', placeholder: 'e.g. Mr. Ram Kishore' },
+  { key: 'address', label: 'Site Address (Col 18)', category: 'Basic Info', placeholder: 'Full installation site address' },
+  { key: 'notes', label: 'Remark / Notes (Col 40)', category: 'Basic Info', inputType: 'textarea', placeholder: 'Discussion history, site remarks...' },
+
+  // Dates (15 Milestones)
+  { key: 'leadDate', label: 'Lead Date (Col 2)', category: 'Dates', placeholder: 'YYYY-MM-DD' },
+  { key: 'followUpDate', label: 'Follow Up Date (Col 3)', category: 'Dates', placeholder: 'YYYY-MM-DD' },
+  { key: 'nextFollowUp', label: 'Next Follow Up (Col 4)', category: 'Dates', placeholder: 'YYYY-MM-DD' },
+  { key: 'convertedDate', label: 'Converted Date (Col 5)', category: 'Dates', placeholder: 'YYYY-MM-DD' },
+  { key: 'quotationDate', label: 'Quotation Date (Col 6)', category: 'Dates', placeholder: 'YYYY-MM-DD' },
+  { key: 'documentationDate', label: 'Documentation Date (Col 7)', category: 'Dates', placeholder: 'YYYY-MM-DD' },
+  { key: 'registrationDate', label: 'Registration Date (Col 8)', category: 'Operations', placeholder: 'YYYY-MM-DD' },
+  { key: 'loanDate', label: 'Loan Date (Col 9)', category: 'Commercials', placeholder: 'YYYY-MM-DD' },
+  { key: 'surveyDate', label: 'Site Survey Date (Col 10)', category: 'Operations', placeholder: 'YYYY-MM-DD' },
+  { key: 'mDispatchDate', label: 'Material Dispatch Date (Col 11)', category: 'Operations', placeholder: 'YYYY-MM-DD' },
+  { key: 'installationDate', label: 'Installation Date (Col 12)', category: 'Operations', placeholder: 'YYYY-MM-DD' },
+  { key: 'netMeterDate', label: 'Net Meter Date (Col 13)', category: 'Operations', placeholder: 'YYYY-MM-DD' },
+  { key: 'connectionDate', label: 'Grid Connection Date (Col 14)', category: 'Operations', placeholder: 'YYYY-MM-DD' },
+  { key: 'completeDate', label: 'Complete Date (Col 15)', category: 'Operations', placeholder: 'YYYY-MM-DD' },
+  { key: 'firstPaymentMonth', label: 'First Payment Month (Col 44)', category: 'Commercials', placeholder: 'e.g. 2/5/2026' },
+
+  // Commercials
+  { key: 'quotationAmount', label: 'Quotation Amount (₹) (Col 24)', category: 'Commercials', inputType: 'number' },
+  { key: 'dealAmount', label: 'Deal Amount (₹) (Col 23)', category: 'Commercials', inputType: 'number' },
+  { key: 'paymentType', label: 'Payment Type (Cash/Loan) (Col 25)', category: 'Commercials', inputType: 'select' },
+  { key: 'paymentReceived', label: 'Payment Received (₹) (Col 38)', category: 'Commercials', inputType: 'number' },
+  { key: 'duePayment', label: 'Due Amount (₹) (Col 39)', category: 'Commercials', inputType: 'number' },
+
+  // Technical Specs
+  { key: 'systemCapacity', label: 'System Capacity (kW) (Col 22)', category: 'Technical', placeholder: 'e.g. 3.15KW Hybrid / 5KW On Grid' },
+  { key: 'panels', label: 'Panels Brand & Model (Col 31)', category: 'Technical', placeholder: 'e.g. Adani 615W DCR Panels' },
+  { key: 'inverters', label: 'Inverters Brand & Model (Col 32)', category: 'Technical', placeholder: 'e.g. 3.3kW UTL Hybrid' },
+  { key: 'battery', label: 'Battery (Col 33)', category: 'Technical', placeholder: 'e.g. UTL 100Ah Lithium / NA' },
+  { key: 'wiring', label: 'Wiring Length (Mtr) (Col 34)', category: 'Technical', placeholder: 'e.g. 170 mtr' },
+  { key: 'structure', label: 'Structure Type (Col 35)', category: 'Technical', placeholder: 'e.g. GI Structure / Elevated' },
+
+  // Documents & Google Drive
+  { key: 'quotationFile', label: 'View Quotation PDF Link (Col 41)', category: 'Documents', placeholder: 'https://drive.google.com/... or Quotation PDF/...' },
+  { key: 'driveFolderUrl', label: 'Google Drive Folder Link', category: 'Documents', placeholder: 'https://drive.google.com/drive/folders/...' },
+  { key: 'quotationFileApproved', label: 'Quotation File Approved (Col 27)', category: 'Documents', placeholder: 'Approved Quotation PDF link' },
+  { key: 'projectSheetApproved', label: 'Project Sheet Approved PDF (Col 28)', category: 'Documents', placeholder: 'Project Sheet Approved PDF link' },
+  { key: 'priceApproval', label: 'Price Approval Image (Col 26)', category: 'Documents', placeholder: 'Price Approval link' },
+  { key: 'documentImage', label: 'Document Image (Col 29)', category: 'Documents', placeholder: 'Aadhaar / Electricity Bill link' },
+  { key: 'otherDocImage', label: 'Other Doc. Image (Col 30)', category: 'Documents', placeholder: 'Other Document link' },
 ];
 
 /**
@@ -76,27 +100,27 @@ export const DEFAULT_STAGE_PERMISSIONS: Record<UserRole, PipelineStage[]> = {
 
 /**
  * Default mandatory (required) fields per Pipeline Stage.
- * User example:
- * At 'New Leads', customer capacity/quote is NOT required; only phone, name, source, and sales person are required.
- * At 'Documentation', documentationDate and consumer details become required.
+ * As requested:
+ * - At 'New Leads' / 'Lead': ONLY Sales Person Name, Phone No, and Source are required (Customer Name / Capacity not required yet).
+ * - Each subsequent stage requires its relevant milestone columns, and Admin can customize any stage freely.
  */
 export const DEFAULT_STAGE_MANDATORY_RULES: Record<PipelineStage, string[]> = {
-  Lead: ['customerName', 'phone', 'source', 'salesPerson'],
-  'New Leads': ['customerName', 'phone', 'source', 'salesPerson'],
-  'Follow Up': ['customerName', 'phone', 'followUpDate', 'salesPerson'],
-  'Converted': ['customerName', 'phone', 'convertedDate', 'systemCapacity', 'dealAmount'],
-  'Quotation': ['customerName', 'phone', 'quotationAmount', 'quotationDate'],
-  'Documentation': ['customerName', 'phone', 'documentationDate'],
-  'Registration': ['customerName', 'registrationDate', 'consumerNumber'],
-  'Loan': ['customerName', 'loanDate'],
-  'Survey': ['customerName', 'surveyDate', 'surveyorName'],
-  'Material Dispatch': ['customerName', 'mDispatchDate'],
-  'Installation': ['customerName', 'installationDate', 'installerName'],
-  'Inspection': ['customerName', 'inspectionDate'],
+  Lead: ['salesPerson', 'phone', 'source'],
+  'New Leads': ['salesPerson', 'phone', 'source'],
+  'Follow Up': ['salesPerson', 'phone', 'followUpDate'],
+  'Converted': ['salesPerson', 'phone', 'customerName', 'convertedDate', 'systemCapacity', 'dealAmount'],
+  'Quotation': ['salesPerson', 'phone', 'customerName', 'quotationAmount', 'quotationDate', 'quotationFile'],
+  'Documentation': ['customerName', 'phone', 'address', 'documentationDate', 'documentImage'],
+  'Registration': ['customerName', 'phone', 'registrationDate'],
+  'Loan': ['customerName', 'phone', 'loanDate', 'paymentType'],
+  'Survey': ['customerName', 'phone', 'surveyDate', 'structure'],
+  'Material Dispatch': ['customerName', 'mDispatchDate', 'panels', 'inverters'],
+  'Installation': ['customerName', 'installationDate', 'wiring', 'structure'],
+  'Inspection': ['customerName', 'installationDate'],
   'Net Meter': ['customerName', 'netMeterDate'],
   'Connection': ['customerName', 'connectionDate'],
-  'Complete': ['customerName', 'paymentReceived'],
-  'Lost': ['customerName', 'notes'],
+  'Complete': ['customerName', 'completeDate', 'paymentReceived'],
+  'Lost': ['phone', 'notes'],
 };
 
 // ---------------------- Stage Permissions Helpers ----------------------
@@ -117,6 +141,9 @@ export function loadStagePermissions(): Record<UserRole, PipelineStage[]> {
 export function saveStagePermissions(permissions: Record<UserRole, PipelineStage[]>): void {
   try {
     localStorage.setItem(STAGE_PERMISSIONS_STORAGE_KEY, JSON.stringify(permissions));
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new Event('crm_stage_rules_updated'));
+    }
   } catch (err) {
     console.error('Failed to save stage permissions:', err);
   }
@@ -157,6 +184,9 @@ export function loadStageMandatoryRules(): Record<PipelineStage, string[]> {
 export function saveStageMandatoryRules(rules: Record<PipelineStage, string[]>): void {
   try {
     localStorage.setItem(STAGE_MANDATORY_STORAGE_KEY, JSON.stringify(rules));
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new Event('crm_stage_rules_updated'));
+    }
   } catch (err) {
     console.error('Failed to save stage mandatory rules:', err);
   }
@@ -181,7 +211,11 @@ export function validateLeadForStage(lead: Partial<Lead>, targetStage: PipelineS
 
   for (const fieldKey of mandatoryFields) {
     const val = (lead as any)[fieldKey];
-    const isMissing = val === undefined || val === null || val === '' || (typeof val === 'number' && val <= 0 && fieldKey !== 'duePayment');
+    const isMissing =
+      val === undefined ||
+      val === null ||
+      (typeof val === 'string' && val.trim() === '') ||
+      (typeof val === 'number' && val <= 0 && fieldKey !== 'duePayment' && fieldKey !== 'paymentReceived');
 
     if (isMissing) {
       missingKeys.push(fieldKey);
@@ -195,7 +229,7 @@ export function validateLeadForStage(lead: Partial<Lead>, targetStage: PipelineS
       isValid: false,
       missingKeys,
       missingLabels,
-      errorMessage: `Stage [${targetStage}] ke liye yeh fields zaroori (mandatory) hain: ${missingLabels.join(', ')}`,
+      errorMessage: `Stage "${targetStage}" ke liye yeh mandatory columns bharna zaroori hai: ${missingLabels.join(', ')}`,
     };
   }
 

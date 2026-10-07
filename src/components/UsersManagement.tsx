@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import type { User, UserRole, ActivityLog, PipelineStage } from '../types/crm';
 import { 
   ColumnAccessRule, 
@@ -116,6 +116,15 @@ export const UsersManagement: React.FC<UsersManagementProps> = ({
   const [copiedEmailMap, setCopiedEmailMap] = useState<Record<string, boolean>>({});
 
   const isAdmin = currentUser.role === 'Admin';
+
+  useEffect(() => {
+    const refreshRules = () => {
+      setMandatoryRules(loadStageMandatoryRules());
+      setStagePermissions(loadStagePermissions());
+    };
+    window.addEventListener('crm_stage_rules_updated', refreshRules);
+    return () => window.removeEventListener('crm_stage_rules_updated', refreshRules);
+  }, []);
 
   const showBannerMessage = (msg: string) => {
     setSaveSuccessMsg(msg);
@@ -311,12 +320,16 @@ export const UsersManagement: React.FC<UsersManagementProps> = ({
       ? currentFields.filter((k) => k !== fieldKey)
       : [...currentFields, fieldKey];
 
-    const updatedRules = {
+    const updatedRules: Record<PipelineStage, string[]> = {
       ...mandatoryRules,
       [stage]: updatedFields,
     };
+    if (stage === 'New Leads') {
+      updatedRules['Lead'] = updatedFields;
+    }
     setMandatoryRules(updatedRules);
     saveStageMandatoryRules(updatedRules);
+    showBannerMessage(`Updated mandatory columns for stage "${stage}".`);
   };
 
   const handleResetMandatoryRules = () => {
