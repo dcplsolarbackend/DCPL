@@ -276,9 +276,16 @@ export function loadColumnPermissions(): ColumnAccessRule[] {
   return DEFAULT_COLUMN_RULES;
 }
 
-export function saveColumnPermissions(rules: ColumnAccessRule[]): void {
+export function saveColumnPermissions(rules: ColumnAccessRule[], syncToServer = true): void {
   try {
     localStorage.setItem(PERMISSIONS_KEY, JSON.stringify(rules));
+    if (syncToServer && typeof window !== 'undefined') {
+      fetch('/api/state', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ columnPermissions: rules }),
+      }).catch(() => {});
+    }
   } catch (e) {
     console.error(e);
   }

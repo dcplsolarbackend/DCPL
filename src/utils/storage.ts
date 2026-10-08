@@ -10,7 +10,7 @@ export function loadLeads(): Lead[] {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) {
-      saveLeads(INITIAL_LEADS);
+      saveLeads(INITIAL_LEADS, false);
       return INITIAL_LEADS;
     }
     const parsed = JSON.parse(raw);
@@ -24,9 +24,16 @@ export function loadLeads(): Lead[] {
   }
 }
 
-export function saveLeads(leads: Lead[]): void {
+export function saveLeads(leads: Lead[], syncToServer = true): void {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(leads));
+    if (syncToServer && typeof window !== 'undefined') {
+      fetch('/api/state', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ leads }),
+      }).catch(() => {});
+    }
   } catch (err) {
     console.error('Error saving leads to localStorage:', err);
   }
@@ -42,7 +49,7 @@ export function loadPayments(): PaymentRecord[] {
   try {
     const raw = localStorage.getItem(PAYMENTS_KEY);
     if (!raw) {
-      savePayments(INITIAL_PAYMENTS);
+      savePayments(INITIAL_PAYMENTS, false);
       return INITIAL_PAYMENTS;
     }
     const parsed = JSON.parse(raw);
@@ -52,9 +59,16 @@ export function loadPayments(): PaymentRecord[] {
   }
 }
 
-export function savePayments(payments: PaymentRecord[]): void {
+export function savePayments(payments: PaymentRecord[], syncToServer = true): void {
   try {
     localStorage.setItem(PAYMENTS_KEY, JSON.stringify(payments));
+    if (syncToServer && typeof window !== 'undefined') {
+      fetch('/api/state', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ payments }),
+      }).catch(() => {});
+    }
   } catch (err) {
     console.error('Error saving payments to localStorage:', err);
   }
@@ -94,15 +108,142 @@ export function loadSyncConfig(): SheetSyncConfig {
   };
 }
 
-export function saveSyncConfig(cfg: SheetSyncConfig): void {
+export function saveSyncConfig(cfg: SheetSyncConfig, syncToServer = true): void {
   try {
     localStorage.setItem(CONFIG_KEY, JSON.stringify(cfg));
     if (cfg.webAppUrl) {
       localStorage.setItem('dcpl_apps_script_url', cfg.webAppUrl.trim());
     }
+    if (syncToServer && typeof window !== 'undefined') {
+      fetch('/api/state', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ syncConfig: cfg }),
+      }).catch(() => {});
+    }
   } catch (e) {
     console.error(e);
   }
+}
+
+/**
+ * Builds a complete, multi-compatible Google Sheet payload for a Lead.
+ * Ensures that whether the Apps Script reads `req.lead`, top-level camelCase keys,
+ * `req.rowValues`, or exact Google Sheet Header keys, all 44 columns are mapped
+ * starting from Column 1 (LeadID) into the exact next upcoming row.
+ */
+export function buildSheetLeadPayload(lead: Lead, updatedBy: string) {
+  const nowTime = lead.lastModifiedTime || new Date().toLocaleString();
+  const rowValues = [
+    lead.leadId || '',
+    lead.leadDate || '',
+    lead.followUpDate || '',
+    lead.nextFollowUp || '',
+    lead.convertedDate || '',
+    lead.quotationDate || '',
+    lead.documentationDate || '',
+    lead.registrationDate || '',
+    lead.loanDate || '',
+    lead.surveyDate || '',
+    lead.mDispatchDate || '',
+    lead.installationDate || '',
+    lead.netMeterDate || '',
+    lead.connectionDate || '',
+    lead.completeDate || '',
+    lead.customerName || '',
+    lead.phone || '',
+    lead.address || '',
+    lead.source || '',
+    lead.salesPerson || '',
+    lead.status || 'New Leads',
+    lead.systemCapacity || '',
+    lead.dealAmount || 0,
+    lead.quotationAmount || 0,
+    lead.paymentType || '',
+    lead.priceApproval || '',
+    lead.quotationFileApproved || '',
+    lead.projectSheetApproved || '',
+    lead.documentImage || '',
+    lead.otherDocImage || '',
+    lead.panels || '',
+    lead.inverters || '',
+    lead.battery || '',
+    lead.wiring || '',
+    lead.structure || '',
+    lead.netMeterDone ? 'TRUE' : 'FALSE',
+    lead.subsidyDone ? 'TRUE' : 'FALSE',
+    lead.paymentReceived || 0,
+    lead.duePayment || 0,
+    lead.notes || '',
+    lead.quotationFile || '',
+    updatedBy || lead.lastModifiedBy || '',
+    nowTime,
+    lead.firstPaymentMonth || '',
+  ];
+
+  return {
+    action: 'saveLead',
+    insertMode: 'nextUpcomingRow',
+    lead: {
+      ...lead,
+      lastModifiedBy: updatedBy || lead.lastModifiedBy || '',
+      lastModifiedTime: nowTime,
+    },
+    ...lead,
+    updatedBy: updatedBy || lead.lastModifiedBy || '',
+    lastModifiedBy: updatedBy || lead.lastModifiedBy || '',
+    lastModifiedTime: nowTime,
+    rowValues,
+    row: rowValues,
+    'LeadID': lead.leadId || '',
+    'Lead Date': lead.leadDate || '',
+    'Follow Up Date': lead.followUpDate || '',
+    'Next Follow Up ': lead.nextFollowUp || '',
+    'Next Follow Up': lead.nextFollowUp || '',
+    'Converted Date': lead.convertedDate || '',
+    'Quotation Date': lead.quotationDate || '',
+    'Documentation Date': lead.documentationDate || '',
+    'Registration Date': lead.registrationDate || '',
+    'Loan Date': lead.loanDate || '',
+    'Survey Date': lead.surveyDate || '',
+    'M Dispatch Date': lead.mDispatchDate || '',
+    'Installation Date': lead.installationDate || '',
+    'Net Meter Date': lead.netMeterDate || '',
+    'Connection Date': lead.connectionDate || '',
+    'Complete Date': lead.completeDate || '',
+    'Customer Name': lead.customerName || '',
+    'Phone No': lead.phone || '',
+    'Phone': lead.phone || '',
+    'Address': lead.address || '',
+    'Source': lead.source || '',
+    'Sales Person': lead.salesPerson || '',
+    'Current Status': lead.status || 'New Leads',
+    'Status': lead.status || 'New Leads',
+    'System Capacity': lead.systemCapacity || '',
+    'Deal Amount': lead.dealAmount || 0,
+    'Quotation Amount': lead.quotationAmount || 0,
+    'Type': lead.paymentType || '',
+    'Price Approval': lead.priceApproval || '',
+    'Quoattion File': lead.quotationFileApproved || '',
+    'Project Sheet Approved': lead.projectSheetApproved || '',
+    'Document Image': lead.documentImage || '',
+    'Other Doc. Image': lead.otherDocImage || '',
+    'Panels': lead.panels || '',
+    'Inverters': lead.inverters || '',
+    'Battery': lead.battery || '',
+    'Wiring': lead.wiring || '',
+    'Structure': lead.structure || '',
+    'Net Meter ': lead.netMeterDone ? 'TRUE' : 'FALSE',
+    'Net Meter': lead.netMeterDone ? 'TRUE' : 'FALSE',
+    'Subsidy': lead.subsidyDone ? 'TRUE' : 'FALSE',
+    'Payment Received': lead.paymentReceived || 0,
+    'Due Amount': lead.duePayment || 0,
+    'Remark': lead.notes || '',
+    'Quotation File': lead.quotationFile || '',
+    'Last Modified By': updatedBy || lead.lastModifiedBy || '',
+    'Last Modified Time': nowTime,
+    'First Payment Month': lead.firstPaymentMonth || '',
+  };
 }
 
 export interface QuotationPdfInfo {

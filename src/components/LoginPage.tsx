@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import type { User } from '../types/crm';
 import { 
   ShieldCheck, 
@@ -11,7 +11,8 @@ import {
   RefreshCw 
 } from 'lucide-react';
 import { PWAInstallButton } from './PWAInstallButton';
-import { loadUsers, setStoredUser, SESSION_DURATION_MS } from '../utils/userStorage';
+import { loadUsers, saveUsers, fetchServerUsers, mergeUsersList, setStoredUser, SESSION_DURATION_MS } from '../utils/userStorage';
+import { loadLeads } from '../utils/storage';
 
 interface LoginPageProps {
   onLoginSuccess: (user: User) => void;
@@ -31,6 +32,37 @@ export function LoginPage({
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [liveUsers, setLiveUsers] = useState<User[]>(users);
+  const [liveWebAppUrl, setLiveWebAppUrl] = useState<string>(webAppUrl);
+
+  // Sync latest users & Google Sheet URL from server on mount so any system/device has Admin's latest user settings
+  useEffect(() => {
+    let active = true;
+    const syncFromServer = async () => {
+      try {
+        const res = await fetch('/api/state');
+        if (res.ok) {
+          const data = await res.json();
+          if (!active) return;
+          if (data && Array.isArray(data.users) && data.users.length > 0) {
+            const merged = mergeUsersList(loadUsers(), data.users);
+            setLiveUsers(merged);
+            saveUsers(merged, false);
+          }
+          if (data?.syncConfig?.webAppUrl && !liveWebAppUrl) {
+            setLiveWebAppUrl(data.syncConfig.webAppUrl);
+          }
+        }
+      } catch {
+        const fallback = await fetchServerUsers();
+        if (active) setLiveUsers(fallback);
+      }
+    };
+    syncFromServer();
+    return () => {
+      active = false;
+    };
+  }, [webAppUrl]);
 
   const triggerLoginSuccess = (user: User) => {
     if (onLoginSuccess) {
@@ -61,18 +93,60 @@ export function LoginPage({
     }
 
     try {
-      // 1. Live Apps Script Auth API Call (if webAppUrl is provided)
       let authenticatedUser: User | null = null;
+      const activeUrl = (liveWebAppUrl || webAppUrl || '').trim();
 
-      if (webAppUrl) {
+      // 1. Multi-System Server Auth API Call (checks shared server store + Google Sheet Users tab)
+      try {
+        const apiRes = await fetch('/api/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            email: cleanEmail,
+            password: cleanPassword,
+            webAppUrl: activeUrl,
+          }),
+        });
+
+        if (apiRes.ok) {
+          const apiData = await apiRes.json();
+          if (apiData.status === 'success' && apiData.user) {
+            authenticatedUser = {
+              id: apiData.user.id || `USR-${Date.now()}`,
+              name: apiData.user.name || cleanEmail.split('@')[0],
+              email: apiData.user.email || cleanEmail,
+              password: cleanPassword,
+              role: apiData.user.role || 'Sales Executive',
+              status: 'Active',
+              phone: apiData.user.phone || '',
+              customAllowedStages: apiData.user.customAllowedStages,
+              lastActive: 'Just now',
+              createdAt: apiData.user.createdAt || new Date().toISOString().split('T')[0],
+            };
+          } else if (apiData.status === 'error' && apiData.message?.includes('Suspended')) {
+            setError(apiData.message);
+            setLoading(false);
+            return;
+          }
+        }
+      } catch (serverErr) {
+        console.warn('Server auth endpoint fallback:', serverErr);
+      }
+
+      // 2. Direct / Proxied Google Apps Script Auth Call (if webAppUrl is configured)
+      if (!authenticatedUser && activeUrl) {
         try {
-          const response = await fetch(webAppUrl, {
+          const response = await fetch('/api/sheet-proxy', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              action: 'login',
-              email: cleanEmail,
-              password: cleanPassword,
+              webAppUrl: activeUrl,
+              method: 'POST',
+              payload: {
+                action: 'login',
+                email: cleanEmail,
+                password: cleanPassword,
+              },
             }),
           });
 
@@ -90,47 +164,78 @@ export function LoginPage({
                 id: resData.user.id || `USR-${Date.now()}`,
                 name: resData.user.name || cleanEmail.split('@')[0],
                 email: resData.user.email || cleanEmail,
+                password: cleanPassword,
                 role: resData.user.role || 'Sales Executive',
                 status: 'Active',
                 phone: resData.user.phone || '',
+                customAllowedStages: resData.user.customAllowedStages,
                 lastActive: 'Just now',
                 createdAt: new Date().toISOString(),
               };
-            } else if (resData.status === 'error') {
-              setError(resData.message || 'Invalid Email or Password');
-              setLoading(false);
-              return;
             }
           }
         } catch (netErr) {
-          console.warn('Live Google Sheet auth unreachable, checking internal directory:', netErr);
+          console.warn('Live Google Sheet auth unreachable, checking directory:', netErr);
         }
       }
 
-      // 2. Local Fallback Verification (Internal database / offline)
+      // 3. Merged Directory Verification (Server + Local Users + Sheet Assigned Sales Persons)
       if (!authenticatedUser) {
-        const localList = users.length > 0 ? users : loadUsers();
-        const matched = localList.find((u) => u.email.toLowerCase() === cleanEmail);
+        const latestServerUsers = await fetchServerUsers();
+        const combinedList = mergeUsersList(mergeUsersList(loadUsers(), users), mergeUsersList(liveUsers, latestServerUsers));
+        const matched = combinedList.find((u) => u.email.trim().toLowerCase() === cleanEmail);
 
-        if (!matched) {
-          setError('Access Denied: This email is not registered in DCPL Solar CRM. Contact Admin.');
-          setLoading(false);
-          return;
+        if (matched) {
+          if (matched.status === 'Inactive') {
+            setError('Account Suspended / Inactive. Contact Admin.');
+            setLoading(false);
+            return;
+          }
+
+          const expectedPass = (matched.password || '').trim();
+          if (
+            expectedPass &&
+            expectedPass !== cleanPassword &&
+            expectedPass.toLowerCase() !== cleanPassword.toLowerCase()
+          ) {
+            setError('Invalid Password. Please check the password configured by Admin.');
+            setLoading(false);
+            return;
+          }
+
+          authenticatedUser = matched;
+        } else {
+          // Check if this email is assigned to any project in the sheet
+          const allLeads = loadLeads();
+          const leadMatch = allLeads.find(
+            (l) =>
+              (l.salesEmail && l.salesEmail.trim().toLowerCase() === cleanEmail) ||
+              (l.salesPerson && l.salesPerson.trim().toLowerCase() === cleanEmail) ||
+              (l.lastModifiedBy && l.lastModifiedBy.trim().toLowerCase() === cleanEmail)
+          );
+
+          if (leadMatch) {
+            authenticatedUser = {
+              id: `USR-${Date.now()}`,
+              name: leadMatch.salesPerson && !leadMatch.salesPerson.includes('@')
+                ? leadMatch.salesPerson
+                : cleanEmail.split('@')[0],
+              email: cleanEmail,
+              password: cleanPassword,
+              role: 'Sales Executive',
+              status: 'Active',
+              phone: '',
+              lastActive: 'Just now',
+              createdAt: new Date().toISOString().split('T')[0],
+            };
+            const updatedUsers = mergeUsersList(combinedList, [authenticatedUser]);
+            saveUsers(updatedUsers, true);
+          } else {
+            setError('Access Denied: This email is not registered in DCPL Solar CRM. Contact Admin.');
+            setLoading(false);
+            return;
+          }
         }
-
-        if (matched.status === 'Inactive') {
-          setError('Account Suspended / Inactive. Contact Admin.');
-          setLoading(false);
-          return;
-        }
-
-        if (matched.password && matched.password !== cleanPassword) {
-          setError('Invalid Email or Password');
-          setLoading(false);
-          return;
-        }
-
-        authenticatedUser = matched;
       }
 
       // Save session with 5-Day Expiry Timestamp (persists across page refreshes)

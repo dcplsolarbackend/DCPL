@@ -10,26 +10,82 @@ const NOTIFICATIONS_KEY = 'crm_notifications_v2';
 // 5 Days Session Duration (in milliseconds)
 export const SESSION_DURATION_MS = 5 * 24 * 60 * 60 * 1000;
 
+export function mergeUsersList(existingUsers: User[], incomingUsers: User[]): User[] {
+  const map = new Map<string, User>();
+  for (const u of existingUsers || []) {
+    const key = (u.email || u.id || '').trim().toLowerCase();
+    if (key) map.set(key, u);
+  }
+  for (const u of incomingUsers || []) {
+    const key = (u.email || u.id || '').trim().toLowerCase();
+    if (!key) continue;
+    const prev = map.get(key);
+    map.set(key, prev ? { ...prev, ...u } : u);
+  }
+  return Array.from(map.values());
+}
+
 export function loadUsers(): User[] {
   try {
     const raw = localStorage.getItem(USERS_STORAGE_KEY);
     if (!raw) {
-      saveUsers(INITIAL_USERS);
+      saveUsers(INITIAL_USERS, false);
       return INITIAL_USERS;
     }
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) && parsed.length > 0 ? parsed : INITIAL_USERS;
+    if (Array.isArray(parsed) && parsed.length > 0) {
+      return mergeUsersList(INITIAL_USERS, parsed);
+    }
+    return INITIAL_USERS;
   } catch (err) {
     return INITIAL_USERS;
   }
 }
 
-export function saveUsers(users: User[]): void {
+export function saveUsers(users: User[], syncToServer = true): void {
   try {
     localStorage.setItem(USERS_STORAGE_KEY, JSON.stringify(users));
+    if (syncToServer && typeof window !== 'undefined') {
+      fetch('/api/state', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ users }),
+      }).catch(() => {});
+
+      // Also sync users to Google Sheet "Users" tab if webAppUrl is configured
+      const rawCfg = localStorage.getItem('crm_sheet_sync_config_v3');
+      const webAppUrl = rawCfg ? JSON.parse(rawCfg)?.webAppUrl : localStorage.getItem('dcpl_apps_script_url');
+      if (webAppUrl) {
+        fetch('/api/sheet-proxy', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            webAppUrl,
+            method: 'POST',
+            payload: { action: 'saveUsers', users },
+          }),
+        }).catch(() => {});
+      }
+    }
   } catch (err) {
     console.error(err);
   }
+}
+
+export async function fetchServerUsers(): Promise<User[]> {
+  try {
+    const res = await fetch('/api/state');
+    if (res.ok) {
+      const data = await res.json();
+      if (data && Array.isArray(data.users) && data.users.length > 0) {
+        localStorage.setItem(USERS_STORAGE_KEY, JSON.stringify(data.users));
+        return data.users;
+      }
+    }
+  } catch (e) {
+    // Fallback to local
+  }
+  return loadUsers();
 }
 
 /**

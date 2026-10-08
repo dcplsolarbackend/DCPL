@@ -40,19 +40,21 @@ interface GoogleSheetSyncModalProps {
 const APPS_SCRIPT_CODE_DRIVE_SHEET = `// =========================================================================
 // DCPL Solar CRM - Google Apps Script (Code.gs)
 // Handles "Main Project Sheet" (44 Columns) + "Payment Sheet" (7 Columns)
-// + Direct Google Drive Document & PDF Uploads
+// + "Users" Sheet (Multi-System Login) + Direct Google Drive PDF Uploads
 // =========================================================================
 
 var MAIN_SHEET_NAME = "Main Project Sheet";
 var PAYMENT_SHEET_NAME = "Payment Sheet";
+var USERS_SHEET_NAME = "Users";
 var DRIVE_FOLDER_NAME = "DCPL Solar CRM Documents";
 
-// 1. GET: Fetch both Main Project Sheet & Payment Sheet data
+// 1. GET: Fetch Main Project Sheet, Payment Sheet & Users Sheet data
 function doGet(e) {
   try {
     var ss = SpreadsheetApp.getActiveSpreadsheet();
     var mainSheet = getOrCreateMainSheet(ss);
     var paySheet = getOrCreatePaymentSheet(ss);
+    var usersSheet = getOrCreateUsersSheet(ss);
     
     // Read Main Project Sheet
     var mainData = mainSheet.getDataRange().getValues();
@@ -61,9 +63,12 @@ function doGet(e) {
     
     for (var i = 0; i < mainData.length; i++) {
       var r = mainData[i];
-      if (r[0]) { // LeadID exists
+      var leadIdVal = String(r[0] || "").trim();
+      var custNameVal = String(r[15] || "").trim();
+      var phoneVal = String(r[16] || "").trim();
+      if (leadIdVal || custNameVal || phoneVal) {
         leads.push({
-          leadId: String(r[0]),
+          leadId: leadIdVal || ("LD-" + (i + 2)),
           leadDate: formatDate(r[1]),
           followUpDate: formatDate(r[2]),
           nextFollowUp: formatDate(r[3]),
@@ -78,12 +83,12 @@ function doGet(e) {
           netMeterDate: formatDate(r[12]),
           connectionDate: formatDate(r[13]),
           completeDate: formatDate(r[14]),
-          customerName: String(r[15] || ""),
-          phone: String(r[16] || ""),
+          customerName: custNameVal,
+          phone: phoneVal,
           address: String(r[17] || ""),
           source: String(r[18] || ""),
           salesPerson: String(r[19] || ""),
-          status: String(r[20] || "Lead"),
+          status: String(r[20] || "New Leads"),
           systemCapacity: String(r[21] || ""),
           dealAmount: Number(r[22]) || 0,
           quotationAmount: Number(r[23]) || 0,
@@ -118,10 +123,10 @@ function doGet(e) {
     
     for (var j = 0; j < payData.length; j++) {
       var pr = payData[j];
-      if (pr[0]) {
+      if (String(pr[0] || "").trim()) {
         payments.push({
           id: "PAY-" + (j + 1),
-          leadId: String(pr[0]),
+          leadId: String(pr[0]).trim(),
           paymentDate: formatDate(pr[1]),
           paymentType: String(pr[2] || ""),
           amount: Number(pr[3]) || 0,
@@ -131,12 +136,37 @@ function doGet(e) {
         });
       }
     }
+
+    // Read Users Sheet
+    var usersData = usersSheet.getDataRange().getValues();
+    usersData.shift(); // remove headers
+    var users = [];
+    for (var u = 0; u < usersData.length; u++) {
+      var ur = usersData[u];
+      if (String(ur[1] || "").trim()) {
+        var customStages = undefined;
+        try {
+          if (ur[7]) customStages = JSON.parse(String(ur[7]));
+        } catch (e) {}
+        users.push({
+          id: String(ur[0] || ("USR-" + (u + 1))),
+          email: String(ur[1]).trim(),
+          password: String(ur[2] || "").trim(),
+          name: String(ur[3] || "").trim(),
+          role: String(ur[4] || "Sales Executive").trim(),
+          status: String(ur[5] || "Active").trim(),
+          phone: String(ur[6] || "").trim(),
+          customAllowedStages: customStages
+        });
+      }
+    }
     
     return ContentService.createTextOutput(JSON.stringify({
       status: "success",
       timestamp: new Date().toISOString(),
       leads: leads,
-      payments: payments
+      payments: payments,
+      users: users
     })).setMimeType(ContentService.MimeType.JSON);
     
   } catch (err) {
@@ -145,7 +175,7 @@ function doGet(e) {
   }
 }
 
-// 2. POST: Save Lead, Record Payment, or Upload File to Google Drive
+// 2. POST: Save Lead (into exact next upcoming row), Record Payment, Sync Users, or Login
 function doPost(e) {
   try {
     var req = JSON.parse(e.postData.contents);
@@ -166,65 +196,100 @@ function doPost(e) {
       })).setMimeType(ContentService.MimeType.JSON);
     }
     
-    // Action 2: Save or Update Lead in Main Project Sheet (44 Columns)
-    if (req.action === "saveLead") {
+    // Action 2: Save or Update Lead in Main Project Sheet (Exact Next Upcoming Row, Columns 1..44)
+    if (req.action === "saveLead" || (!req.action && (req.leadId || req["LeadID"] || req.lead))) {
       var mainSheet = getOrCreateMainSheet(ss);
-      saveSingleLead(mainSheet, req.lead, req.updatedBy);
-      return ContentService.createTextOutput(JSON.stringify({ status: "success", leadId: req.lead.leadId }))
+      var leadObj = req.lead || req;
+      var savedRow = saveSingleLead(mainSheet, leadObj, req.updatedBy);
+      return ContentService.createTextOutput(JSON.stringify({
+        status: "success",
+        leadId: leadObj.leadId || leadObj["LeadID"],
+        row: savedRow
+      })).setMimeType(ContentService.MimeType.JSON);
+    }
+
+    // Action 2B: Batch Sync
+    if (req.action === "syncBatch") {
+      var mainSheetBatch = getOrCreateMainSheet(ss);
+      if (req.leads && req.leads.length) {
+        for (var k = 0; k < req.leads.length; k++) {
+          saveSingleLead(mainSheetBatch, req.leads[k], req.updatedBy);
+        }
+      }
+      if (req.users && req.users.length) {
+        var uSheetBatch = getOrCreateUsersSheet(ss);
+        saveUsersToSheet(uSheetBatch, req.users);
+      }
+      return ContentService.createTextOutput(JSON.stringify({ status: "success" }))
         .setMimeType(ContentService.MimeType.JSON);
     }
     
-    // Action 3: Save Payment record in Payment Sheet (7 Columns)
+    // Action 3: Save Payment record in Payment Sheet (Exact Next Upcoming Row, Columns 1..7)
     if (req.action === "savePayment") {
       var paySheet = getOrCreatePaymentSheet(ss);
       var mainSheetForPay = getOrCreateMainSheet(ss);
-      var p = req.payment;
+      var p = req.payment || req;
       
-      paySheet.appendRow([
-        p.leadId,
-        p.paymentDate,
-        p.paymentType,
-        p.amount,
-        p.transactionId,
+      var payRowData = [
+        p.leadId || "",
+        p.paymentDate || "",
+        p.paymentType || "",
+        Number(p.amount) || 0,
+        p.transactionId || "",
         p.receiptImage || "",
         p.remark || ""
-      ]);
+      ];
+
+      var targetPayRow = findNextEmptyPaymentRow(paySheet);
+      paySheet.getRange(targetPayRow, 1, 1, 7).setValues([payRowData]);
       
       // Update due amount in Main Project Sheet
       updateLeadPaymentTotals(mainSheetForPay, p.leadId);
       
-      return ContentService.createTextOutput(JSON.stringify({ status: "success", transactionId: p.transactionId }))
+      return ContentService.createTextOutput(JSON.stringify({ status: "success", transactionId: p.transactionId, row: targetPayRow }))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
+
+    // Action 4: Save / Sync Users from Admin Settings so any system can log in
+    if (req.action === "saveUsers" && req.users) {
+      var usersSheetSync = getOrCreateUsersSheet(ss);
+      saveUsersToSheet(usersSheetSync, req.users);
+      return ContentService.createTextOutput(JSON.stringify({ status: "success", count: req.users.length }))
         .setMimeType(ContentService.MimeType.JSON);
     }
     
-    // Action 4: User Verification & Role Authentication from "Users" Sheet
+    // Action 5: User Verification & Role Authentication from "Users" Sheet
     if (req.action === "login") {
-      var usersSheet = ss.getSheetByName("Users");
-      if (!usersSheet) {
-        usersSheet = ss.insertSheet("Users");
-        usersSheet.appendRow(["UserID", "Email", "Password", "Name", "Role", "Status"]);
-        usersSheet.appendRow(["USR-01", "dcplsolarbackend@gmail.com", "admin", "DCPL Solar Admin", "Admin", "Active"]);
-        usersSheet.appendRow(["USR-02", "gurupreetraj12@gmail.com", "sales", "Gurupreet Raj", "Sales Executive", "Active"]);
-      }
+      var usersSheet = getOrCreateUsersSheet(ss);
       var usersData = usersSheet.getDataRange().getValues();
+      var reqEmail = String(req.email || "").toLowerCase().trim();
+      var reqPass = String(req.password || "").trim();
+
       for (var u = 1; u < usersData.length; u++) {
-        var uEmail = String(usersData[u][1]).toLowerCase().trim();
-        var uPass = String(usersData[u][2]).trim();
+        var uEmail = String(usersData[u][1] || "").toLowerCase().trim();
+        var uPass = String(usersData[u][2] || "").trim();
         var uStatus = String(usersData[u][5] || "Active").trim();
 
-        if (uEmail === String(req.email).toLowerCase().trim() && (!uPass || uPass === String(req.password).trim())) {
+        if (uEmail === reqEmail && (!uPass || uPass === reqPass || uPass.toLowerCase() === reqPass.toLowerCase())) {
           if (uStatus === "Inactive") {
             return ContentService.createTextOutput(JSON.stringify({ status: "error", message: "User account is suspended (Inactive)." }))
               .setMimeType(ContentService.MimeType.JSON);
           }
+          var customAllowedStages = undefined;
+          try {
+            if (usersData[u][7]) customAllowedStages = JSON.parse(String(usersData[u][7]));
+          } catch (err) {}
+
           return ContentService.createTextOutput(JSON.stringify({
             status: "success",
             user: {
-              id: String(usersData[u][0]),
-              email: String(usersData[u][1]),
-              name: String(usersData[u][3]),
-              role: String(usersData[u][4]),
-              status: uStatus
+              id: String(usersData[u][0] || ("USR-" + u)),
+              email: String(usersData[u][1]).trim(),
+              name: String(usersData[u][3] || reqEmail.split("@")[0]),
+              role: String(usersData[u][4] || "Sales Executive"),
+              status: uStatus,
+              phone: String(usersData[u][6] || ""),
+              customAllowedStages: customAllowedStages
             }
           })).setMimeType(ContentService.MimeType.JSON);
         }
@@ -242,68 +307,143 @@ function doPost(e) {
   }
 }
 
+// Writes Lead strictly into Columns 1..44 (Col A..AR) at either the matching LeadID row
+// OR the exact next upcoming empty row (ignoring empty rows that only have FALSE checkboxes/formulas)
 function saveSingleLead(sheet, l, updatedBy) {
-  var data = sheet.getDataRange().getValues();
-  var rowIdx = -1;
+  var lastRow = Math.max(sheet.getLastRow(), 1);
+  var numCols = Math.max(sheet.getLastColumn(), 44);
+  var data = sheet.getRange(1, 1, lastRow, numCols).getValues();
+  var leadIdStr = String(l.leadId || l["LeadID"] || "").trim();
+
+  var existingRowIdx = -1;
+  var firstUpcomingEmptyRowIdx = -1;
+
   for (var i = 1; i < data.length; i++) {
-    if (String(data[i][0]) === String(l.leadId)) {
-      rowIdx = i + 1;
+    var rowLeadId = String(data[i][0] || "").trim();
+    var rowCustomer = String(data[i][15] || "").trim();
+    var rowPhone = String(data[i][16] || "").trim();
+
+    if (leadIdStr && rowLeadId === leadIdStr) {
+      existingRowIdx = i + 1;
       break;
+    }
+
+    // A row is truly empty if LeadID (Col A), Customer Name (Col P), and Phone No (Col Q) are all blank,
+    // even if Columns 36/37 have unchecked FALSE checkboxes or Col 39 has a formula.
+    if (firstUpcomingEmptyRowIdx === -1 && rowLeadId === "" && rowCustomer === "" && rowPhone === "") {
+      firstUpcomingEmptyRowIdx = i + 1;
     }
   }
   
   var rowData = [
-    l.leadId,
-    l.leadDate || "",
-    l.followUpDate || "",
-    l.nextFollowUp || "",
-    l.convertedDate || "",
-    l.quotationDate || "",
-    l.documentationDate || "",
-    l.registrationDate || "",
-    l.loanDate || "",
-    l.surveyDate || "",
-    l.mDispatchDate || "",
-    l.installationDate || "",
-    l.netMeterDate || "",
-    l.connectionDate || "",
-    l.completeDate || "",
-    l.customerName || "",
-    l.phone || "",
-    l.address || "",
-    l.source || "",
-    l.salesPerson || "",
-    l.status || "Lead",
-    l.systemCapacity || "",
-    l.dealAmount || 0,
-    l.quotationAmount || 0,
-    l.paymentType || "",
-    l.priceApproval || "",
-    l.quotationFileApproved || "",
-    l.projectSheetApproved || "",
-    l.documentImage || "",
-    l.otherDocImage || "",
-    l.panels || "",
-    l.inverters || "",
-    l.battery || "",
-    l.wiring || "",
-    l.structure || "",
-    l.netMeterDone ? "TRUE" : "FALSE",
-    l.subsidyDone ? "TRUE" : "FALSE",
-    l.paymentReceived || 0,
-    l.duePayment || 0,
-    l.notes || "",
-    l.quotationFile || "",
-    updatedBy || l.lastModifiedBy || "",
+    leadIdStr,
+    l.leadDate || l["Lead Date"] || "",
+    l.followUpDate || l["Follow Up Date"] || "",
+    l.nextFollowUp || l["Next Follow Up "] || l["Next Follow Up"] || "",
+    l.convertedDate || l["Converted Date"] || "",
+    l.quotationDate || l["Quotation Date"] || "",
+    l.documentationDate || l["Documentation Date"] || "",
+    l.registrationDate || l["Registration Date"] || "",
+    l.loanDate || l["Loan Date"] || "",
+    l.surveyDate || l["Survey Date"] || "",
+    l.mDispatchDate || l["M Dispatch Date"] || "",
+    l.installationDate || l["Installation Date"] || "",
+    l.netMeterDate || l["Net Meter Date"] || "",
+    l.connectionDate || l["Connection Date"] || "",
+    l.completeDate || l["Complete Date"] || "",
+    l.customerName || l["Customer Name"] || "",
+    l.phone || l["Phone No"] || "",
+    l.address || l["Address"] || "",
+    l.source || l["Source"] || "",
+    l.salesPerson || l["Sales Person"] || "",
+    l.status || l["Current Status"] || "New Leads",
+    l.systemCapacity || l["System Capacity"] || "",
+    Number(l.dealAmount || l["Deal Amount"]) || 0,
+    Number(l.quotationAmount || l["Quotation Amount"]) || 0,
+    l.paymentType || l["Type"] || "",
+    l.priceApproval || l["Price Approval"] || "",
+    l.quotationFileApproved || l["Quoattion File"] || "",
+    l.projectSheetApproved || l["Project Sheet Approved"] || "",
+    l.documentImage || l["Document Image"] || "",
+    l.otherDocImage || l["Other Doc. Image"] || "",
+    l.panels || l["Panels"] || "",
+    l.inverters || l["Inverters"] || "",
+    l.battery || l["Battery"] || "",
+    l.wiring || l["Wiring"] || "",
+    l.structure || l["Structure"] || "",
+    (l.netMeterDone === true || String(l.netMeterDone).toUpperCase() === "TRUE") ? "TRUE" : "FALSE",
+    (l.subsidyDone === true || String(l.subsidyDone).toUpperCase() === "TRUE") ? "TRUE" : "FALSE",
+    Number(l.paymentReceived || l["Payment Received"]) || 0,
+    Number(l.duePayment || l["Due Amount"]) || 0,
+    l.notes || l["Remark"] || "",
+    l.quotationFile || l["Quotation File"] || "",
+    updatedBy || l.lastModifiedBy || l["Last Modified By"] || "",
     Utilities.formatDate(new Date(), "GMT+5:30", "M/d/yyyy HH:mm:ss"),
-    l.firstPaymentMonth || ""
+    l.firstPaymentMonth || l["First Payment Month"] || ""
   ];
   
-  if (rowIdx > 0) {
-    sheet.getRange(rowIdx, 1, 1, 44).setValues([rowData]);
-  } else {
-    sheet.appendRow(rowData);
+  var targetRow = existingRowIdx > 0
+    ? existingRowIdx
+    : (firstUpcomingEmptyRowIdx > 0 ? firstUpcomingEmptyRowIdx : data.length + 1);
+
+  // Always write starting at Column 1 (Column A) across 44 columns
+  sheet.getRange(targetRow, 1, 1, 44).setValues([rowData]);
+  return targetRow;
+}
+
+function findNextEmptyPaymentRow(paySheet) {
+  var lastRow = Math.max(paySheet.getLastRow(), 1);
+  var data = paySheet.getRange(1, 1, lastRow, 7).getValues();
+  for (var i = 1; i < data.length; i++) {
+    var rowLeadId = String(data[i][0] || "").trim();
+    var rowAmount = String(data[i][3] || "").trim();
+    if (rowLeadId === "" && (rowAmount === "" || rowAmount === "0")) {
+      return i + 1;
+    }
   }
+  return data.length + 1;
+}
+
+function saveUsersToSheet(usersSheet, users) {
+  var lastRow = usersSheet.getLastRow();
+  if (lastRow > 1) {
+    usersSheet.getRange(2, 1, lastRow - 1, 8).clearContent();
+  }
+  var rows = [];
+  for (var i = 0; i < users.length; i++) {
+    var u = users[i];
+    rows.push([
+      u.id || ("USR-0" + (i + 1)),
+      u.email || "",
+      u.password || "sales",
+      u.name || "",
+      u.role || "Sales Executive",
+      u.status || "Active",
+      u.phone || "",
+      u.customAllowedStages ? JSON.stringify(u.customAllowedStages) : ""
+    ]);
+  }
+  if (rows.length > 0) {
+    usersSheet.getRange(2, 1, rows.length, 8).setValues(rows);
+  }
+}
+
+function getOrCreateUsersSheet(ss) {
+  var usersSheet = ss.getSheetByName(USERS_SHEET_NAME);
+  if (!usersSheet) {
+    usersSheet = ss.insertSheet(USERS_SHEET_NAME);
+    usersSheet.getRange(1, 1, 1, 8).setValues([[
+      "UserID", "Email", "Password", "Name", "Role", "Status", "Phone", "CustomStagesJSON"
+    ]]);
+    var initialRows = [
+      ["USR-01", "dcplsolarbackend@gmail.com", "admin", "DCPL Solar Admin", "Admin", "Active", "+919876543210", ""],
+      ["USR-02", "gurupreetraj12@gmail.com", "sales", "Gurupreet Raj", "Sales Executive", "Active", "+918273684253", ""],
+      ["USR-08", "ankurjain198606@gmail.com", "sales", "Ankur Jain", "Sales Executive", "Active", "+919359975775", ""],
+      ["USR-09", "akashkumar7310586822@gmail.com", "admin", "Akash Kumar", "Operations Engineer", "Active", "+917310586822", ""]
+    ];
+    usersSheet.getRange(2, 1, initialRows.length, 8).setValues(initialRows);
+  }
+  return usersSheet;
 }
 
 function updateLeadPaymentTotals(mainSheet, leadId) {

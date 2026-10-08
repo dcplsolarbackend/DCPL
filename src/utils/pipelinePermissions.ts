@@ -2,7 +2,7 @@ import type { PipelineStage, UserRole, User, Lead } from '../types/crm';
 import { ALL_STAGES } from '../constants/stages';
 
 const STAGE_PERMISSIONS_STORAGE_KEY = 'crm_stage_permissions_v1';
-const STAGE_MANDATORY_STORAGE_KEY = 'crm_stage_mandatory_rules_v3';
+const STAGE_MANDATORY_STORAGE_KEY = 'crm_stage_mandatory_rules_v4';
 
 export interface StageFieldDefinition {
   key: keyof Lead & string;
@@ -138,11 +138,18 @@ export function loadStagePermissions(): Record<UserRole, PipelineStage[]> {
   return { ...DEFAULT_STAGE_PERMISSIONS };
 }
 
-export function saveStagePermissions(permissions: Record<UserRole, PipelineStage[]>): void {
+export function saveStagePermissions(permissions: Record<UserRole, PipelineStage[]>, syncToServer = true): void {
   try {
     localStorage.setItem(STAGE_PERMISSIONS_STORAGE_KEY, JSON.stringify(permissions));
     if (typeof window !== 'undefined') {
       window.dispatchEvent(new Event('crm_stage_rules_updated'));
+      if (syncToServer) {
+        fetch('/api/state', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ stagePermissions: permissions }),
+        }).catch(() => {});
+      }
     }
   } catch (err) {
     console.error('Failed to save stage permissions:', err);
@@ -181,11 +188,18 @@ export function loadStageMandatoryRules(): Record<PipelineStage, string[]> {
   return { ...DEFAULT_STAGE_MANDATORY_RULES };
 }
 
-export function saveStageMandatoryRules(rules: Record<PipelineStage, string[]>): void {
+export function saveStageMandatoryRules(rules: Record<PipelineStage, string[]>, syncToServer = true): void {
   try {
     localStorage.setItem(STAGE_MANDATORY_STORAGE_KEY, JSON.stringify(rules));
     if (typeof window !== 'undefined') {
       window.dispatchEvent(new Event('crm_stage_rules_updated'));
+      if (syncToServer) {
+        fetch('/api/state', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ stageMandatoryRules: rules }),
+        }).catch(() => {});
+      }
     }
   } catch (err) {
     console.error('Failed to save stage mandatory rules:', err);

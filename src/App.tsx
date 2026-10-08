@@ -17,12 +17,14 @@ import {
   savePayments,
   loadSyncConfig, 
   saveSyncConfig,
+  buildSheetLeadPayload,
   exportToGoogleSheetCsv,
   downloadCsv
 } from './utils/storage';
 import { 
   loadUsers, 
   saveUsers, 
+  mergeUsersList,
   getStoredUser, 
   setStoredUser,
   logoutUser,
@@ -39,7 +41,12 @@ import {
   isSales, 
   isOperations 
 } from './constants/pipeline';
-import { validateLeadForStage } from './utils/pipelinePermissions';
+import { 
+  validateLeadForStage, 
+  saveStagePermissions, 
+  saveStageMandatoryRules 
+} from './utils/pipelinePermissions';
+import { saveColumnPermissions } from './utils/permissionStorage';
 import { TopNav } from './components/TopNav';
 import { Sidebar } from './components/Sidebar';
 import { LeadsTable } from './components/LeadsTable';
@@ -95,7 +102,7 @@ export default function App() {
     }, 3500);
   };
 
-  // Load initial data on mount & check 5-day session validity
+  // Load initial data on mount, sync multi-device server state & check 5-day session validity
   useEffect(() => {
     const loadedUsers = loadUsers();
     setUsers(loadedUsers);
@@ -109,8 +116,58 @@ export default function App() {
       setIsAuthenticated(false);
     }
 
-    // Periodically verify 5-day session expiry
+    const syncMultiSystemState = async () => {
+      try {
+        const res = await fetch('/api/state');
+        if (res.ok) {
+          const data = await res.json();
+          const localUsers = loadUsers();
+          const serverUsers = Array.isArray(data.users) ? data.users : [];
+          const mergedUsers = mergeUsersList(serverUsers, localUsers);
+          setUsers(mergedUsers);
+          saveUsers(mergedUsers, false);
+
+          // Push merged users & local config back so any user created by Admin on this browser is available on all systems
+          const localCfg = loadSyncConfig();
+          const mergedCfg = {
+            ...localCfg,
+            ...(data.syncConfig || {}),
+            webAppUrl: localCfg.webAppUrl || data.syncConfig?.webAppUrl || '',
+          };
+          if (mergedCfg.webAppUrl) {
+            setSyncConfig(mergedCfg);
+            saveSyncConfig(mergedCfg, false);
+          }
+
+          if (data.stagePermissions) {
+            saveStagePermissions(data.stagePermissions, false);
+          }
+          if (data.stageMandatoryRules) {
+            saveStageMandatoryRules(data.stageMandatoryRules, false);
+          }
+          if (Array.isArray(data.columnPermissions) && data.columnPermissions.length > 0) {
+            saveColumnPermissions(data.columnPermissions, false);
+          }
+
+          fetch('/api/state', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              users: mergedUsers,
+              syncConfig: mergedCfg,
+            }),
+          }).catch(() => {});
+        }
+      } catch {
+        // Offline fallback
+      }
+    };
+
+    syncMultiSystemState();
+
+    // Periodically verify 5-day session expiry & sync multi-device users
     const sessionCheckTimer = setInterval(() => {
+      syncMultiSystemState();
       const validUser = getStoredUser(loadUsers());
       if (!validUser) {
         setCurrentUserState(null);
@@ -128,6 +185,33 @@ export default function App() {
   const roleFilteredLeads = useMemo(() => {
     return filterLeadsByRole(leads, currentUser);
   }, [leads, currentUser]);
+
+  // Helper to push a Lead to Google Sheet (into exact next upcoming row, Columns 1..44)
+  const pushLeadToGoogleSheet = useCallback((leadToPush: Lead, userEmail: string) => {
+    const targetUrl = (syncConfig.webAppUrl || '').trim();
+    if (!targetUrl) return;
+
+    const payload = buildSheetLeadPayload(leadToPush, userEmail);
+
+    // 1. Send via backend proxy to follow Apps Script redirects cleanly
+    fetch('/api/sheet-proxy', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        webAppUrl: targetUrl,
+        method: 'POST',
+        payload,
+      }),
+    }).catch(() => {
+      // 2. Fallback direct browser dispatch
+      fetch(targetUrl, {
+        method: 'POST',
+        mode: 'no-cors',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify(payload),
+      }).catch((e) => console.log('Sync queued:', e));
+    });
+  }, [syncConfig.webAppUrl]);
 
   // Save Lead (Add or Edit)
   const handleSaveLead = (lead: Lead) => {
@@ -147,8 +231,9 @@ export default function App() {
         updated = prev.map((l) => (l.leadId === lead.leadId ? leadWithMeta : l));
         showToast(`Project ${lead.leadId} updated.`);
       } else {
-        updated = [leadWithMeta, ...prev];
-        showToast(`New project ${lead.leadId} created.`);
+        // Append in exact upcoming sheet row order
+        updated = [...prev, leadWithMeta];
+        showToast(`New project ${lead.leadId} added to next upcoming row.`);
       }
       saveLeads(updated);
       return updated;
@@ -161,35 +246,20 @@ export default function App() {
       action: 'EDIT_LEAD',
       leadId: lead.leadId,
       leadName: lead.customerName,
-      details: `${currentUser.name} saved project ${lead.customerName} (${lead.status})`,
+      details: `${currentUser.name} saved project ${lead.customerName || lead.phone} (${lead.status})`,
     });
     setActivityLogs((prev) => [log, ...prev]);
 
     const notif = addNotification({
       title: 'Project Saved',
-      message: `${currentUser.name} saved ${lead.customerName} (${lead.leadId})`,
+      message: `${currentUser.name} saved ${lead.customerName || lead.phone} (${lead.leadId})`,
       type: 'lead_assigned',
       targetLeadId: lead.leadId,
     });
     setNotifications((prev) => [notif, ...prev]);
 
-    // Push to Google Sheet
-    if (syncConfig.webAppUrl) {
-      try {
-        fetch(syncConfig.webAppUrl, {
-          method: 'POST',
-          mode: 'no-cors',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            action: 'saveLead',
-            lead: leadWithMeta,
-            updatedBy: currentUser.email,
-          }),
-        }).catch((e) => console.log('Sync queued:', e));
-      } catch (e) {
-        console.error(e);
-      }
-    }
+    // Push to Google Sheet (Exact Next Upcoming Row, Columns 1..44)
+    pushLeadToGoogleSheet(leadWithMeta, currentUser.email);
   };
 
   // Add Payment Record
@@ -223,21 +293,30 @@ export default function App() {
       saveLeads(updatedList);
 
       if (syncConfig.webAppUrl) {
-        try {
+        const payPayload = {
+          action: 'savePayment',
+          insertMode: 'nextUpcomingRow',
+          payment: newPay,
+          ...newPay,
+          lead: updatedLead,
+          updatedBy: currentUser.email,
+        };
+        fetch('/api/sheet-proxy', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            webAppUrl: syncConfig.webAppUrl,
+            method: 'POST',
+            payload: payPayload,
+          }),
+        }).catch(() => {
           fetch(syncConfig.webAppUrl, {
             method: 'POST',
             mode: 'no-cors',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              action: 'savePayment',
-              payment: newPay,
-              lead: updatedLead,
-              updatedBy: currentUser.email,
-            }),
+            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+            body: JSON.stringify(payPayload),
           }).catch((e) => console.log('Payment sync queued:', e));
-        } catch (e) {
-          console.error(e);
-        }
+        });
       }
 
       return updatedList;
@@ -283,8 +362,23 @@ export default function App() {
     setIsSyncing(true);
 
     try {
-      const res = await fetch(targetUrl, { method: 'GET', mode: 'cors' });
-      const json = await res.json();
+      let json: any = null;
+      try {
+        const proxyRes = await fetch('/api/sheet-proxy', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            webAppUrl: targetUrl,
+            method: 'GET',
+          }),
+        });
+        if (proxyRes.ok) {
+          json = await proxyRes.json();
+        }
+      } catch {
+        const res = await fetch(targetUrl, { method: 'GET', mode: 'cors' });
+        json = await res.json();
+      }
 
       if (json && json.leads && Array.isArray(json.leads)) {
         if (json.leads.length > 0) {
@@ -295,6 +389,14 @@ export default function App() {
         if (json.payments && Array.isArray(json.payments) && json.payments.length > 0) {
           setPayments(json.payments);
           savePayments(json.payments);
+        }
+
+        if (json.users && Array.isArray(json.users) && json.users.length > 0) {
+          setUsers((prevUsers) => {
+            const merged = mergeUsersList(prevUsers, json.users);
+            saveUsers(merged, true);
+            return merged;
+          });
         }
 
         const nowIso = new Date().toISOString();
@@ -317,15 +419,19 @@ export default function App() {
         }
       } else if (!silent) {
         // Fallback post on manual trigger
-        await fetch(targetUrl, {
+        await fetch('/api/sheet-proxy', {
           method: 'POST',
-          mode: 'no-cors',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            action: 'syncBatch',
-            leads: leads,
-            payments: payments,
-            updatedBy: currentUser.email,
+            webAppUrl: targetUrl,
+            method: 'POST',
+            payload: {
+              action: 'syncBatch',
+              leads: leads,
+              payments: payments,
+              users: users,
+              updatedBy: currentUser.email,
+            },
           }),
         });
         showToast('Local database synced to Google Sheet.');
@@ -336,11 +442,12 @@ export default function App() {
           await fetch(targetUrl, {
             method: 'POST',
             mode: 'no-cors',
-            headers: { 'Content-Type': 'application/json' },
+            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
             body: JSON.stringify({
               action: 'syncBatch',
               leads: leads,
               payments: payments,
+              users: users,
               updatedBy: currentUser.email,
             }),
           });
@@ -353,7 +460,7 @@ export default function App() {
       isSyncingRef.current = false;
       setIsSyncing(false);
     }
-  }, [currentUser, syncConfig.webAppUrl, leads, payments]);
+  }, [currentUser, syncConfig.webAppUrl, leads, payments, users]);
 
   // Automatic Background Sync (Auto-Sync when settings/URL are valid)
   useEffect(() => {
@@ -452,22 +559,7 @@ export default function App() {
     });
     setActivityLogs((prev) => [log, ...prev]);
 
-    if (syncConfig.webAppUrl) {
-      try {
-        fetch(syncConfig.webAppUrl, {
-          method: 'POST',
-          mode: 'no-cors',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            action: 'saveLead',
-            lead: updatedLead,
-            updatedBy: currentUser.email,
-          }),
-        }).catch((e) => console.log('Sync queued:', e));
-      } catch (e) {
-        console.error(e);
-      }
-    }
+    pushLeadToGoogleSheet(updatedLead, currentUser.email);
   };
 
   const handleReschedule = (leadId: string, newDate: string) => {
