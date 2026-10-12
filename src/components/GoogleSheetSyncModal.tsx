@@ -56,7 +56,33 @@ function doGet(e) {
     var paySheet = getOrCreatePaymentSheet(ss);
     var usersSheet = getOrCreateUsersSheet(ss);
     
-    // Read Main Project Sheet
+    // Step A: Read Payment Sheet first and sum payments by LeadID
+    var payData = paySheet.getDataRange().getValues();
+    payData.shift(); // remove headers
+    var payments = [];
+    var paymentSumByLeadId = {};
+    
+    for (var j = 0; j < payData.length; j++) {
+      var pr = payData[j];
+      var payLeadId = String(pr[0] || "").trim();
+      var payAmt = Number(pr[3]) || 0;
+      if (payLeadId) {
+        payments.push({
+          id: "PAY-" + (j + 1),
+          leadId: payLeadId,
+          paymentDate: formatDate(pr[1]),
+          paymentType: String(pr[2] || ""),
+          amount: payAmt,
+          transactionId: String(pr[4] || ""),
+          receiptImage: String(pr[5] || ""),
+          remark: String(pr[6] || "")
+        });
+        var normKey = payLeadId.toLowerCase();
+        paymentSumByLeadId[normKey] = (paymentSumByLeadId[normKey] || 0) + payAmt;
+      }
+    }
+
+    // Step B: Read Main Project Sheet and calculate Payment Received & Due Amount from Payment Sheet sum
     var mainData = mainSheet.getDataRange().getValues();
     var mainHeaders = mainData.shift(); // remove headers
     var leads = [];
@@ -67,8 +93,17 @@ function doGet(e) {
       var custNameVal = String(r[15] || "").trim();
       var phoneVal = String(r[16] || "").trim();
       if (leadIdVal || custNameVal || phoneVal) {
+        var resolvedId = leadIdVal || ("LD-" + (i + 2));
+        var dealAmt = Number(r[22]) || 0;
+        var sheetPaidAmt = Number(r[37]) || 0;
+        var normLeadKey = resolvedId.toLowerCase();
+        var summedPaid = paymentSumByLeadId[normLeadKey] !== undefined
+          ? paymentSumByLeadId[normLeadKey]
+          : sheetPaidAmt;
+        var calcDueAmt = Math.max(0, dealAmt - summedPaid);
+
         leads.push({
-          leadId: leadIdVal || ("LD-" + (i + 2)),
+          leadId: resolvedId,
           leadDate: formatDate(r[1]),
           followUpDate: formatDate(r[2]),
           nextFollowUp: formatDate(r[3]),
@@ -90,7 +125,7 @@ function doGet(e) {
           salesPerson: String(r[19] || ""),
           status: String(r[20] || "New Leads"),
           systemCapacity: String(r[21] || ""),
-          dealAmount: Number(r[22]) || 0,
+          dealAmount: dealAmt,
           quotationAmount: Number(r[23]) || 0,
           paymentType: String(r[24] || ""),
           priceApproval: String(r[25] || ""),
@@ -105,34 +140,13 @@ function doGet(e) {
           structure: String(r[34] || ""),
           netMeterDone: String(r[35]).toUpperCase() === "TRUE",
           subsidyDone: String(r[36]).toUpperCase() === "TRUE",
-          paymentReceived: Number(r[37]) || 0,
-          duePayment: Number(r[38]) || 0,
+          paymentReceived: summedPaid,
+          duePayment: calcDueAmt,
           notes: String(r[39] || ""),
           quotationFile: String(r[40] || ""),
           lastModifiedBy: String(r[41] || ""),
           lastModifiedTime: formatDate(r[42]),
           firstPaymentMonth: formatDate(r[43])
-        });
-      }
-    }
-    
-    // Read Payment Sheet
-    var payData = paySheet.getDataRange().getValues();
-    payData.shift(); // remove headers
-    var payments = [];
-    
-    for (var j = 0; j < payData.length; j++) {
-      var pr = payData[j];
-      if (String(pr[0] || "").trim()) {
-        payments.push({
-          id: "PAY-" + (j + 1),
-          leadId: String(pr[0]).trim(),
-          paymentDate: formatDate(pr[1]),
-          paymentType: String(pr[2] || ""),
-          amount: Number(pr[3]) || 0,
-          transactionId: String(pr[4] || ""),
-          receiptImage: String(pr[5] || ""),
-          remark: String(pr[6] || "")
         });
       }
     }
@@ -175,7 +189,7 @@ function doGet(e) {
   }
 }
 
-// 2. POST: Save Lead (into exact next upcoming row), Record Payment, Sync Users, or Login
+// 2. POST: Save Lead (into exact next upcoming row), Record Payment in Payment Sheet, Sync Users, or Login
 function doPost(e) {
   try {
     var req = JSON.parse(e.postData.contents);
@@ -199,8 +213,10 @@ function doPost(e) {
     // Action 2: Save or Update Lead in Main Project Sheet (Exact Next Upcoming Row, Columns 1..44)
     if (req.action === "saveLead" || (!req.action && (req.leadId || req["LeadID"] || req.lead))) {
       var mainSheet = getOrCreateMainSheet(ss);
+      var paySheetForLead = getOrCreatePaymentSheet(ss);
       var leadObj = req.lead || req;
       var savedRow = saveSingleLead(mainSheet, leadObj, req.updatedBy);
+      updateLeadPaymentTotals(mainSheet, paySheetForLead, leadObj.leadId || leadObj["LeadID"]);
       return ContentService.createTextOutput(JSON.stringify({
         status: "success",
         leadId: leadObj.leadId || leadObj["LeadID"],
@@ -211,9 +227,16 @@ function doPost(e) {
     // Action 2B: Batch Sync
     if (req.action === "syncBatch") {
       var mainSheetBatch = getOrCreateMainSheet(ss);
+      var paySheetBatch = getOrCreatePaymentSheet(ss);
+      if (req.payments && req.payments.length) {
+        for (var pIdx = 0; pIdx < req.payments.length; pIdx++) {
+          saveSinglePaymentToSheet(paySheetBatch, req.payments[pIdx]);
+        }
+      }
       if (req.leads && req.leads.length) {
         for (var k = 0; k < req.leads.length; k++) {
           saveSingleLead(mainSheetBatch, req.leads[k], req.updatedBy);
+          updateLeadPaymentTotals(mainSheetBatch, paySheetBatch, req.leads[k].leadId || req.leads[k]["LeadID"]);
         }
       }
       if (req.users && req.users.length) {
@@ -224,30 +247,22 @@ function doPost(e) {
         .setMimeType(ContentService.MimeType.JSON);
     }
     
-    // Action 3: Save Payment record in Payment Sheet (Exact Next Upcoming Row, Columns 1..7)
+    // Action 3: Save Payment record in Payment Sheet by LeadID (Exact Next Upcoming Row, Columns 1..7)
     if (req.action === "savePayment") {
       var paySheet = getOrCreatePaymentSheet(ss);
       var mainSheetForPay = getOrCreateMainSheet(ss);
       var p = req.payment || req;
+      var targetPayRow = saveSinglePaymentToSheet(paySheet, p);
       
-      var payRowData = [
-        p.leadId || "",
-        p.paymentDate || "",
-        p.paymentType || "",
-        Number(p.amount) || 0,
-        p.transactionId || "",
-        p.receiptImage || "",
-        p.remark || ""
-      ];
-
-      var targetPayRow = findNextEmptyPaymentRow(paySheet);
-      paySheet.getRange(targetPayRow, 1, 1, 7).setValues([payRowData]);
+      // Recalculate and update Payment Received & Due Amount in Main Project Sheet from Payment Sheet sum
+      updateLeadPaymentTotals(mainSheetForPay, paySheet, p.leadId || p["LeadID"]);
       
-      // Update due amount in Main Project Sheet
-      updateLeadPaymentTotals(mainSheetForPay, p.leadId);
-      
-      return ContentService.createTextOutput(JSON.stringify({ status: "success", transactionId: p.transactionId, row: targetPayRow }))
-        .setMimeType(ContentService.MimeType.JSON);
+      return ContentService.createTextOutput(JSON.stringify({
+        status: "success",
+        leadId: p.leadId || p["LeadID"],
+        transactionId: p.transactionId || p["Transaction ID"],
+        row: targetPayRow
+      })).setMimeType(ContentService.MimeType.JSON);
     }
 
     // Action 4: Save / Sync Users from Admin Settings so any system can log in
@@ -391,17 +406,50 @@ function saveSingleLead(sheet, l, updatedBy) {
   return targetRow;
 }
 
-function findNextEmptyPaymentRow(paySheet) {
+function saveSinglePaymentToSheet(paySheet, p) {
+  var leadIdStr = String(p.leadId || p["LeadID"] || "").trim();
+  var payDateStr = String(p.paymentDate || p["Payment Date"] || "");
+  var payTypeStr = String(p.paymentType || p["Payment Type"] || "UPI");
+  var payAmt = Number(p.amount || p["Amount"]) || 0;
+  var txnIdStr = String(p.transactionId || p["Transaction ID"] || "").trim();
+  var receiptStr = String(p.receiptImage || p["Receipt Image"] || "");
+  var remarkStr = String(p.remark || p["Remark"] || "");
+
   var lastRow = Math.max(paySheet.getLastRow(), 1);
   var data = paySheet.getRange(1, 1, lastRow, 7).getValues();
+  var existingRowIdx = -1;
+  var firstEmptyRowIdx = -1;
+
   for (var i = 1; i < data.length; i++) {
     var rowLeadId = String(data[i][0] || "").trim();
-    var rowAmount = String(data[i][3] || "").trim();
-    if (rowLeadId === "" && (rowAmount === "" || rowAmount === "0")) {
-      return i + 1;
+    var rowAmt = String(data[i][3] || "").trim();
+    var rowTxn = String(data[i][4] || "").trim();
+
+    if (leadIdStr && txnIdStr && rowLeadId.toLowerCase() === leadIdStr.toLowerCase() && rowTxn.toLowerCase() === txnIdStr.toLowerCase()) {
+      existingRowIdx = i + 1;
+      break;
+    }
+    if (firstEmptyRowIdx === -1 && rowLeadId === "" && (rowAmt === "" || rowAmt === "0")) {
+      firstEmptyRowIdx = i + 1;
     }
   }
-  return data.length + 1;
+
+  var payRowData = [
+    leadIdStr,
+    payDateStr,
+    payTypeStr,
+    payAmt,
+    txnIdStr,
+    receiptStr,
+    remarkStr
+  ];
+
+  var targetRow = existingRowIdx > 0
+    ? existingRowIdx
+    : (firstEmptyRowIdx > 0 ? firstEmptyRowIdx : data.length + 1);
+
+  paySheet.getRange(targetRow, 1, 1, 7).setValues([payRowData]);
+  return targetRow;
 }
 
 function saveUsersToSheet(usersSheet, users) {
@@ -446,59 +494,69 @@ function getOrCreateUsersSheet(ss) {
   return usersSheet;
 }
 
-function updateLeadPaymentTotals(mainSheet, leadId) {
+function updateLeadPaymentTotals(mainSheet, paySheet, leadId) {
+  var normTargetId = String(leadId || "").trim().toLowerCase();
+  if (!normTargetId) return;
+
+  var pSheet = paySheet || getOrCreatePaymentSheet(SpreadsheetApp.getActiveSpreadsheet());
+  var payData = pSheet.getDataRange().getValues();
+  var totalForLead = 0;
+  var matchCount = 0;
+
+  for (var k = 1; k < payData.length; k++) {
+    if (String(payData[k][0] || "").trim().toLowerCase() === normTargetId) {
+      totalForLead += Number(payData[k][3]) || 0;
+      matchCount++;
+    }
+  }
+
+  if (matchCount === 0) return;
+
   var data = mainSheet.getDataRange().getValues();
   for (var i = 1; i < data.length; i++) {
-    if (String(data[i][0]) === String(leadId)) {
+    if (String(data[i][0] || "").trim().toLowerCase() === normTargetId) {
       var row = i + 1;
       var deal = Number(data[i][22]) || 0;
-      var currentReceived = Number(data[i][37]) || 0;
-      var paySheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(PAYMENT_SHEET_NAME);
-      
-      var payData = paySheet.getDataRange().getValues();
-      var totalForLead = 0;
-      for (var k = 1; k < payData.length; k++) {
-        if (String(payData[k][0]) === String(leadId)) {
-          totalForLead += Number(payData[k][3]) || 0;
-        }
-      }
-      
       var newDue = Math.max(0, deal - totalForLead);
-      mainSheet.getRange(row, 38).setValue(totalForLead); // Payment Received
-      mainSheet.getRange(row, 39).setValue(newDue);        // Due Amount
+      mainSheet.getRange(row, 38).setValue(totalForLead); // Col 38: Payment Received (summed from Payment Sheet)
+      mainSheet.getRange(row, 39).setValue(newDue);       // Col 39: Due Amount
       break;
     }
   }
 }
 
 function getOrCreateMainSheet(ss) {
-  var s = ss.getSheetByName(MAIN_SHEET_NAME);
-  if (!s) {
-    s = ss.insertSheet(MAIN_SHEET_NAME);
-    s.appendRow([
-      "LeadID", "Lead Date", "Follow Up Date", "Next Follow Up ", "Converted Date",
-      "Quotation Date", "Documentation Date", "Registration Date", "Loan Date",
-      "Survey Date", "M Dispatch Date", "Installation Date", "Net Meter Date",
-      "Connection Date", "Complete Date", "Customer Name", "Phone No", "Address",
-      "Source", "Sales Person", "Current Status", "System Capacity", "Deal Amount",
-      "Quotation Amount", "Type", "Price Approval", "Quoattion File",
-      "Project Sheet Approved", "Document Image", "Other Doc. Image", "Panels",
-      "Inverters", "Battery", "Wiring", "Structure", "Net Meter ", "Subsidy",
-      "Payment Received", "Due Amount", "Remark", "Quotation File", "Last Modified By",
-      "Last Modified Time", "First Payment Month"
-    ]);
+  var names = [MAIN_SHEET_NAME, "Main Data", "Main Sheet", "Leads"];
+  for (var n = 0; n < names.length; n++) {
+    var existing = ss.getSheetByName(names[n]);
+    if (existing) return existing;
   }
+  var s = ss.insertSheet(MAIN_SHEET_NAME);
+  s.appendRow([
+    "LeadID", "Lead Date", "Follow Up Date", "Next Follow Up ", "Converted Date",
+    "Quotation Date", "Documentation Date", "Registration Date", "Loan Date",
+    "Survey Date", "M Dispatch Date", "Installation Date", "Net Meter Date",
+    "Connection Date", "Complete Date", "Customer Name", "Phone No", "Address",
+    "Source", "Sales Person", "Current Status", "System Capacity", "Deal Amount",
+    "Quotation Amount", "Type", "Price Approval", "Quoattion File",
+    "Project Sheet Approved", "Document Image", "Other Doc. Image", "Panels",
+    "Inverters", "Battery", "Wiring", "Structure", "Net Meter ", "Subsidy",
+    "Payment Received", "Due Amount", "Remark", "Quotation File", "Last Modified By",
+    "Last Modified Time", "First Payment Month"
+  ]);
   return s;
 }
 
 function getOrCreatePaymentSheet(ss) {
-  var s = ss.getSheetByName(PAYMENT_SHEET_NAME);
-  if (!s) {
-    s = ss.insertSheet(PAYMENT_SHEET_NAME);
-    s.appendRow([
-      "LeadID", "Payment Date", "Payment Type", "Amount", "Transaction ID", "Receipt Image", "Remark"
-    ]);
+  var names = [PAYMENT_SHEET_NAME, "Payment Details", "Payment Data", "Payments", "Payment"];
+  for (var n = 0; n < names.length; n++) {
+    var existing = ss.getSheetByName(names[n]);
+    if (existing) return existing;
   }
+  var s = ss.insertSheet(PAYMENT_SHEET_NAME);
+  s.appendRow([
+    "LeadID", "Payment Date", "Payment Type", "Amount", "Transaction ID", "Receipt Image", "Remark"
+  ]);
   return s;
 }
 

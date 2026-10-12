@@ -6,18 +6,91 @@ const STORAGE_KEY = 'crm_leads_data_v3';
 const PAYMENTS_KEY = 'crm_payments_data_v3';
 const CONFIG_KEY = 'crm_sheet_sync_config_v3';
 
+export function normalizeLeadId(id: string | undefined | null): string {
+  return String(id || '').trim().toLowerCase();
+}
+
+export function getLeadPayments(leadId: string | undefined | null, payments: PaymentRecord[]): PaymentRecord[] {
+  const target = normalizeLeadId(leadId);
+  if (!target) return [];
+  return (payments || []).filter((p) => normalizeLeadId(p.leadId) === target);
+}
+
+export function getLeadPaymentSummary(lead: Partial<Lead> | null | undefined, payments: PaymentRecord[]) {
+  if (!lead) {
+    return { payments: [] as PaymentRecord[], totalPaid: 0, dealAmount: 0, dueAmount: 0 };
+  }
+  const matching = getLeadPayments(lead.leadId, payments);
+  const summedFromSheet = matching.reduce((acc, p) => acc + (Number(p.amount) || 0), 0);
+  const totalPaid = matching.length > 0 ? summedFromSheet : Number(lead.paymentReceived) || 0;
+  const dealAmount = Number(lead.dealAmount) || 0;
+  const dueAmount = Math.max(0, dealAmount - totalPaid);
+  return {
+    payments: matching,
+    totalPaid,
+    dealAmount,
+    dueAmount,
+  };
+}
+
+/**
+ * Reconciles Main Project Sheet (leads) with Payment Sheet (payments) by LeadID.
+ * Sums all payment entries for each LeadID from Payment Sheet and updates
+ * Lead's paymentReceived (Col 38) and duePayment (Col 39).
+ */
+export function reconcileLeadsWithPayments(leads: Lead[], payments: PaymentRecord[]): Lead[] {
+  if (!Array.isArray(leads)) return [];
+  return leads.map((lead) => {
+    const summary = getLeadPaymentSummary(lead, payments);
+    if (lead.paymentReceived === summary.totalPaid && lead.duePayment === summary.dueAmount) {
+      return lead;
+    }
+    return {
+      ...lead,
+      paymentReceived: summary.totalPaid,
+      duePayment: summary.dueAmount,
+    };
+  });
+}
+
+export function mergePaymentsList(existing: PaymentRecord[], incoming: PaymentRecord[]): PaymentRecord[] {
+  const map = new Map<string, PaymentRecord>();
+  const makeKey = (p: PaymentRecord) => {
+    const lid = normalizeLeadId(p.leadId);
+    const txn = String(p.transactionId || '').trim().toLowerCase();
+    if (lid && txn) return `${lid}::${txn}`;
+    return p.id || `${lid}::${p.paymentDate}::${p.amount}`;
+  };
+
+  for (const p of existing || []) {
+    if (p && p.leadId) {
+      map.set(makeKey(p), p);
+    }
+  }
+  for (const p of incoming || []) {
+    if (p && p.leadId) {
+      const k = makeKey(p);
+      const prev = map.get(k);
+      map.set(k, prev ? { ...prev, ...p } : p);
+    }
+  }
+  return Array.from(map.values());
+}
+
 export function loadLeads(): Lead[] {
   try {
+    const payments = loadPayments();
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) {
-      saveLeads(INITIAL_LEADS, false);
-      return INITIAL_LEADS;
+      const reconciled = reconcileLeadsWithPayments(INITIAL_LEADS, payments);
+      saveLeads(reconciled, false);
+      return reconciled;
     }
     const parsed = JSON.parse(raw);
     if (Array.isArray(parsed) && parsed.length > 0) {
-      return parsed;
+      return reconcileLeadsWithPayments(parsed, payments);
     }
-    return INITIAL_LEADS;
+    return reconcileLeadsWithPayments(INITIAL_LEADS, payments);
   } catch (err) {
     console.error('Error reading leads from localStorage:', err);
     return INITIAL_LEADS;
@@ -40,9 +113,10 @@ export function saveLeads(leads: Lead[], syncToServer = true): void {
 }
 
 export function resetLeads(): Lead[] {
-  saveLeads(INITIAL_LEADS);
+  const reconciled = reconcileLeadsWithPayments(INITIAL_LEADS, INITIAL_PAYMENTS);
   savePayments(INITIAL_PAYMENTS);
-  return INITIAL_LEADS;
+  saveLeads(reconciled);
+  return reconciled;
 }
 
 export function loadPayments(): PaymentRecord[] {
@@ -53,7 +127,15 @@ export function loadPayments(): PaymentRecord[] {
       return INITIAL_PAYMENTS;
     }
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) && parsed.length > 0 ? parsed : INITIAL_PAYMENTS;
+    if (Array.isArray(parsed) && parsed.length > 0) {
+      // Ensure all initial lead payment entries are present alongside any user-added payments
+      const merged = mergePaymentsList(INITIAL_PAYMENTS, parsed);
+      if (merged.length !== parsed.length) {
+        savePayments(merged, false);
+      }
+      return merged;
+    }
+    return INITIAL_PAYMENTS;
   } catch (err) {
     return INITIAL_PAYMENTS;
   }
@@ -243,6 +325,46 @@ export function buildSheetLeadPayload(lead: Lead, updatedBy: string) {
     'Last Modified By': updatedBy || lead.lastModifiedBy || '',
     'Last Modified Time': nowTime,
     'First Payment Month': lead.firstPaymentMonth || '',
+  };
+}
+
+/**
+ * Builds a complete, multi-compatible Google Sheet payload for a Payment Record.
+ * Ensures the entry is added into the "Payment Sheet" linked by LeadID (Columns 1..7)
+ * and triggers recalculation of the Lead's Payment Received & Due Amount in Main Project Sheet.
+ */
+export function buildSheetPaymentPayload(payment: PaymentRecord, updatedLead?: Lead, updatedBy?: string) {
+  const rowValues = [
+    payment.leadId || '',
+    payment.paymentDate || '',
+    payment.paymentType || 'UPI',
+    Number(payment.amount) || 0,
+    payment.transactionId || '',
+    payment.receiptImage || '',
+    payment.remark || '',
+  ];
+
+  return {
+    action: 'savePayment',
+    insertMode: 'nextUpcomingRow',
+    targetSheet: 'Payment Sheet',
+    payment: {
+      ...payment,
+      amount: Number(payment.amount) || 0,
+    },
+    ...payment,
+    amount: Number(payment.amount) || 0,
+    lead: updatedLead,
+    updatedBy: updatedBy || '',
+    rowValues,
+    row: rowValues,
+    'LeadID': payment.leadId || '',
+    'Payment Date': payment.paymentDate || '',
+    'Payment Type': payment.paymentType || 'UPI',
+    'Amount': Number(payment.amount) || 0,
+    'Transaction ID': payment.transactionId || '',
+    'Receipt Image': payment.receiptImage || '',
+    'Remark': payment.remark || '',
   };
 }
 

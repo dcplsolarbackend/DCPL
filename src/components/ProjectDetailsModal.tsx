@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { Lead, PipelineStage, PaymentRecord, User } from '../types/crm';
-import { getQuotationPdfInfo } from '../utils/storage';
+import { getQuotationPdfInfo, getLeadPayments } from '../utils/storage';
 import { 
   loadColumnPermissions, 
   canViewColumn, 
@@ -14,7 +14,6 @@ import {
   DEFAULT_STAGE_MANDATORY_RULES,
   validateLeadForStage 
 } from '../utils/pipelinePermissions';
-import { ALL_STAGES } from '../constants/stages';
 import { 
   X, 
   Save, 
@@ -27,7 +26,10 @@ import {
   AlertCircle,
   RotateCcw,
   Sparkles,
-  Layers
+  Layers,
+  Receipt,
+  Upload,
+  Image as ImageIcon
 } from 'lucide-react';
 
 interface ProjectDetailsModalProps {
@@ -36,9 +38,11 @@ interface ProjectDetailsModalProps {
   lead: Lead | null;
   onSaveLead: (lead: Lead) => void;
   payments: PaymentRecord[];
+  onAddPayment?: (payment: PaymentRecord) => void;
   onAddPaymentForLead: (leadId: string) => void;
   currentUser: User;
   users?: User[];
+  initialTab?: 'stage' | 'info' | 'technical' | 'dates' | 'files' | 'payments';
 }
 
 const STAGES: PipelineStage[] = [
@@ -65,17 +69,28 @@ export const ProjectDetailsModal: React.FC<ProjectDetailsModalProps> = ({
   lead,
   onSaveLead,
   payments,
+  onAddPayment,
   onAddPaymentForLead,
   currentUser,
   users = [],
+  initialTab = 'stage',
 }) => {
   const [formData, setFormData] = useState<Partial<Lead>>({});
-  const [activeTab, setActiveTab] = useState<'stage' | 'info' | 'technical' | 'dates' | 'files' | 'payments'>('stage');
+  const [activeTab, setActiveTab] = useState<'stage' | 'info' | 'technical' | 'dates' | 'files' | 'payments'>(initialTab);
   const [columnRules] = useState<ColumnAccessRule[]>(loadColumnPermissions());
   const [stageMandatoryRules, setStageMandatoryRules] = useState<Record<PipelineStage, string[]>>(() => loadStageMandatoryRules());
   const [isCustomizingStage, setIsCustomizingStage] = useState(false);
   const [validationError, setValidationError] = useState<string | null>(null);
   const [missingFieldKeys, setMissingFieldKeys] = useState<string[]>([]);
+
+  // Inline Payment Sheet Entry Form state (linked by LeadID)
+  const [newPayDate, setNewPayDate] = useState(() => new Date().toISOString().split('T')[0]);
+  const [newPayType, setNewPayType] = useState('UPI');
+  const [newPayAmount, setNewPayAmount] = useState<number | ''>('');
+  const [newPayTxnId, setNewPayTxnId] = useState('');
+  const [newPayReceipt, setNewPayReceipt] = useState('');
+  const [newPayRemark, setNewPayRemark] = useState('');
+  const [payAddedBanner, setPayAddedBanner] = useState<string | null>(null);
 
   const isViewable = (colKey: string) => canViewColumn(colKey, currentUser.role, columnRules);
   const isEditable = (colKey: string) => canEditColumn(colKey, currentUser.role, columnRules);
@@ -94,10 +109,25 @@ export const ProjectDetailsModal: React.FC<ProjectDetailsModalProps> = ({
     setValidationError(null);
     setMissingFieldKeys([]);
     setIsCustomizingStage(false);
-    setActiveTab('stage');
+    setActiveTab(initialTab || 'stage');
+    setNewPayDate(new Date().toISOString().split('T')[0]);
+    setNewPayType('UPI');
+    setNewPayAmount('');
+    setNewPayTxnId('');
+    setNewPayReceipt('');
+    setNewPayRemark('');
+    setPayAddedBanner(null);
 
     if (lead) {
-      setFormData(lead);
+      const matchingPays = getLeadPayments(lead.leadId, payments);
+      const summedPaid = matchingPays.reduce((acc, p) => acc + (Number(p.amount) || 0), 0);
+      const effectivePaid = matchingPays.length > 0 ? summedPaid : (Number(lead.paymentReceived) || 0);
+      const effectiveDeal = Number(lead.dealAmount) || 0;
+      setFormData({
+        ...lead,
+        paymentReceived: effectivePaid,
+        duePayment: Math.max(0, effectiveDeal - effectivePaid),
+      });
     } else {
       const newId = Math.floor(10000000 + Math.random() * 90000000).toString(16).substring(0, 8);
       const today = new Date().toISOString().split('T')[0];
@@ -128,7 +158,35 @@ export const ProjectDetailsModal: React.FC<ProjectDetailsModalProps> = ({
         notes: '',
       });
     }
-  }, [lead, isOpen, currentUser]);
+  }, [lead, isOpen, currentUser, initialTab]);
+
+  // All Payment Sheet rows linked to this Lead's LeadID
+  const leadPayments = useMemo(() => {
+    return getLeadPayments(formData.leadId, payments);
+  }, [formData.leadId, payments]);
+
+  const summedPaymentSheetAmount = useMemo(() => {
+    return leadPayments.reduce((acc, p) => acc + (Number(p.amount) || 0), 0);
+  }, [leadPayments]);
+
+  // Keep formData.paymentReceived and formData.duePayment synced with Payment Sheet sum
+  useEffect(() => {
+    if (!isOpen) return;
+    if (leadPayments.length > 0) {
+      setFormData((prev) => {
+        const deal = Number(prev.dealAmount) || 0;
+        const nextDue = Math.max(0, deal - summedPaymentSheetAmount);
+        if (prev.paymentReceived === summedPaymentSheetAmount && prev.duePayment === nextDue) {
+          return prev;
+        }
+        return {
+          ...prev,
+          paymentReceived: summedPaymentSheetAmount,
+          duePayment: nextDue,
+        };
+      });
+    }
+  }, [leadPayments.length, summedPaymentSheetAmount, isOpen]);
 
   const currentStage: PipelineStage = (formData.status as PipelineStage) || 'New Leads';
 
@@ -138,13 +196,70 @@ export const ProjectDetailsModal: React.FC<ProjectDetailsModalProps> = ({
   }, [stageMandatoryRules, currentStage]);
 
   const currentStageFieldDefs = useMemo(() => {
-    // Keep the order in currentStageFieldKeys or FIELD_DEFINITIONS
     return FIELD_DEFINITIONS.filter((def) => currentStageFieldKeys.includes(def.key));
   }, [currentStageFieldKeys]);
 
   if (!isOpen) return null;
 
-  const leadPayments = payments.filter((p) => p.leadId === formData.leadId);
+  const handleReceiptFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        setNewPayReceipt(event.target?.result as string);
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
+  // Add a payment entry directly into Payment Sheet by LeadID and recalculate Lead totals
+  const handleAddInlinePaymentToSheet = () => {
+    const amt = Number(newPayAmount) || 0;
+    if (amt <= 0) {
+      setValidationError('Please enter a valid payment amount (₹) to add to the Payment Sheet.');
+      return;
+    }
+
+    const ensuredLeadId = formData.leadId || Math.floor(10000000 + Math.random() * 90000000).toString(16).substring(0, 8);
+    const paymentRecord: PaymentRecord = {
+      id: `PAY-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+      leadId: ensuredLeadId,
+      paymentDate: newPayDate || new Date().toISOString().split('T')[0],
+      paymentType: newPayType || 'UPI',
+      amount: amt,
+      transactionId: newPayTxnId.trim() || `TXN-${Math.floor(100000 + Math.random() * 900000)}`,
+      receiptImage: newPayReceipt || '',
+      remark: newPayRemark.trim() || `Payment for ${formData.customerName || formData.phone || ensuredLeadId} (by ${currentUser.name})`,
+      createdAt: new Date().toISOString(),
+    };
+
+    const nextTotalPaid = summedPaymentSheetAmount + amt;
+    const deal = Number(formData.dealAmount) || 0;
+    const nextDue = Math.max(0, deal - nextTotalPaid);
+
+    setFormData((prev) => ({
+      ...prev,
+      leadId: ensuredLeadId,
+      paymentReceived: nextTotalPaid,
+      duePayment: nextDue,
+    }));
+
+    if (onAddPayment) {
+      onAddPayment(paymentRecord);
+    }
+
+    if (missingFieldKeys.includes('paymentReceived')) {
+      setMissingFieldKeys((prev) => prev.filter((k) => k !== 'paymentReceived'));
+    }
+    setValidationError(null);
+    setPayAddedBanner(
+      `₹${amt.toLocaleString('en-IN')} added to Payment Sheet under LeadID "${ensuredLeadId}". Total Paid is now ₹${nextTotalPaid.toLocaleString('en-IN')}.`
+    );
+    setNewPayAmount('');
+    setNewPayTxnId('');
+    setNewPayReceipt('');
+    setNewPayRemark('');
+  };
 
   const handleToggleStageField = (fieldKey: string) => {
     const currentList = stageMandatoryRules[currentStage] || [];
@@ -195,10 +310,11 @@ export const ProjectDetailsModal: React.FC<ProjectDetailsModalProps> = ({
 
     if (key === 'dealAmount') {
       const deal = parseFloat(val) || 0;
-      const rec = Number(formData.paymentReceived) || 0;
+      const rec = leadPayments.length > 0 ? summedPaymentSheetAmount : (Number(formData.paymentReceived) || 0);
       setFormData((prev) => ({
         ...prev,
         dealAmount: deal,
+        paymentReceived: rec,
         duePayment: Math.max(0, deal - rec),
       }));
       return;
@@ -234,8 +350,44 @@ export const ProjectDetailsModal: React.FC<ProjectDetailsModalProps> = ({
     setValidationError(null);
     setMissingFieldKeys([]);
 
+    const ensuredLeadId = formData.leadId || Math.floor(10000000 + Math.random() * 90000000).toString(16).substring(0, 8);
     const deal = Number(formData.dealAmount) || 0;
-    const received = Number(formData.paymentReceived) || 0;
+
+    // If user typed a pending payment amount in the inline Payment Sheet form and clicked Save Project Record,
+    // automatically record that entry in the Payment Sheet first!
+    let extraPayAmt = Number(newPayAmount) || 0;
+    if (extraPayAmt > 0 && onAddPayment) {
+      const autoPayment: PaymentRecord = {
+        id: `PAY-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+        leadId: ensuredLeadId,
+        paymentDate: newPayDate || new Date().toISOString().split('T')[0],
+        paymentType: newPayType || 'UPI',
+        amount: extraPayAmt,
+        transactionId: newPayTxnId.trim() || `TXN-${Math.floor(100000 + Math.random() * 900000)}`,
+        receiptImage: newPayReceipt || '',
+        remark: newPayRemark.trim() || `Payment for ${formData.customerName || formData.phone || ensuredLeadId} (by ${currentUser.name})`,
+        createdAt: new Date().toISOString(),
+      };
+      onAddPayment(autoPayment);
+    } else if (leadPayments.length === 0 && (Number(formData.paymentReceived) || 0) > 0 && onAddPayment) {
+      // If a manual paymentReceived was entered on a lead with 0 Payment Sheet rows, create the corresponding Payment Sheet entry by LeadID
+      const initialManualAmt = Number(formData.paymentReceived) || 0;
+      const autoInitialPayment: PaymentRecord = {
+        id: `PAY-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+        leadId: ensuredLeadId,
+        paymentDate: formData.leadDate || new Date().toISOString().split('T')[0],
+        paymentType: formData.paymentType || 'UPI',
+        amount: initialManualAmt,
+        transactionId: `TXN-${Math.floor(100000 + Math.random() * 900000)}`,
+        receiptImage: '',
+        remark: `Initial payment recorded from Lead form (${formData.customerName || formData.phone || ensuredLeadId})`,
+        createdAt: new Date().toISOString(),
+      };
+      onAddPayment(autoInitialPayment);
+    }
+
+    const totalFromPaymentSheet = (leadPayments.length > 0 ? summedPaymentSheetAmount : (Number(formData.paymentReceived) || 0)) + extraPayAmt;
+    const received = totalFromPaymentSheet;
     const due = Math.max(0, deal - received);
 
     // Resolve Sales Person name & backend email
@@ -245,7 +397,7 @@ export const ProjectDetailsModal: React.FC<ProjectDetailsModalProps> = ({
     const resolvedAssignedTo = matchedUser ? matchedUser.id : (formData.assignedTo || currentUser.id);
 
     const updatedLead: Lead = {
-      leadId: formData.leadId || Math.floor(10000000 + Math.random() * 90000000).toString(16).substring(0, 8),
+      leadId: ensuredLeadId,
       leadDate: formData.leadDate || new Date().toISOString().split('T')[0],
       followUpDate: formData.followUpDate || '',
       nextFollowUp: formData.nextFollowUp || '',
