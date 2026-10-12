@@ -123,6 +123,7 @@ export interface User {
   assignedLeadsCount?: number;
   lastActive: string;
   createdAt: string;
+  updatedAt?: number;
   loggedInAt?: number;
   expiryAt?: number;
   customAllowedStages?: PipelineStage[];
@@ -161,6 +162,7 @@ export type ViewMode =
 
 export interface SheetSyncConfig {
   webAppUrl: string;
+  paymentWebAppUrl?: string;
   spreadsheetId?: string;
   mainSheetName: string;
   paymentSheetName: string;

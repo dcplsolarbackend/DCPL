@@ -96,7 +96,8 @@ export function LoginPage({
       let authenticatedUser: User | null = null;
       const activeUrl = (liveWebAppUrl || webAppUrl || '').trim();
 
-      // 1. Multi-System Server Auth API Call (checks shared server store + Google Sheet Users tab)
+      // 1. Multi-System Server Auth API Call (checks shared server store + clientUsers + Google Sheet Users tab)
+      const localCombinedUsers = mergeUsersList(loadUsers(), mergeUsersList(users, liveUsers));
       try {
         const apiRes = await fetch('/api/auth/login', {
           method: 'POST',
@@ -105,6 +106,7 @@ export function LoginPage({
             email: cleanEmail,
             password: cleanPassword,
             webAppUrl: activeUrl,
+            clientUsers: localCombinedUsers,
           }),
         });
 
@@ -120,6 +122,7 @@ export function LoginPage({
               status: 'Active',
               phone: apiData.user.phone || '',
               customAllowedStages: apiData.user.customAllowedStages,
+              updatedAt: apiData.user.updatedAt || Date.now(),
               lastActive: 'Just now',
               createdAt: apiData.user.createdAt || new Date().toISOString().split('T')[0],
             };
@@ -169,6 +172,7 @@ export function LoginPage({
                 status: 'Active',
                 phone: resData.user.phone || '',
                 customAllowedStages: resData.user.customAllowedStages,
+                updatedAt: Date.now(),
                 lastActive: 'Just now',
                 createdAt: new Date().toISOString(),
               };
@@ -182,28 +186,57 @@ export function LoginPage({
       // 3. Merged Directory Verification (Server + Local Users + Sheet Assigned Sales Persons)
       if (!authenticatedUser) {
         const latestServerUsers = await fetchServerUsers();
-        const combinedList = mergeUsersList(mergeUsersList(loadUsers(), users), mergeUsersList(liveUsers, latestServerUsers));
-        const matched = combinedList.find((u) => u.email.trim().toLowerCase() === cleanEmail);
+        const combinedList = mergeUsersList(localCombinedUsers, latestServerUsers);
+        const allCandidateSources = [...localCombinedUsers, ...latestServerUsers, ...users, ...liveUsers];
 
-        if (matched) {
-          if (matched.status === 'Inactive') {
+        const matchesIdentifier = (u: User) => {
+          const uEmail = (u.email || '').trim().toLowerCase();
+          const uPrefix = uEmail.split('@')[0];
+          const uId = (u.id || '').trim().toLowerCase();
+          const uName = (u.name || '').trim().toLowerCase();
+          const uPhoneDigits = (u.phone || '').replace(/\D/g, '');
+          const inputDigits = cleanEmail.replace(/\D/g, '');
+
+          if (uEmail === cleanEmail) return true;
+          if (!cleanEmail.includes('@') && uPrefix && uPrefix === cleanEmail) return true;
+          if (uId && uId === cleanEmail) return true;
+          if (uName && uName === cleanEmail) return true;
+          if (inputDigits.length >= 8 && uPhoneDigits.length >= 8 && uPhoneDigits.slice(-10) === inputDigits.slice(-10)) {
+            return true;
+          }
+          return false;
+        };
+
+        const matchedCandidates = allCandidateSources.filter(matchesIdentifier);
+        const primaryMatched = combinedList.find(matchesIdentifier) || matchedCandidates[0];
+
+        if (primaryMatched) {
+          if (primaryMatched.status === 'Inactive') {
             setError('Account Suspended / Inactive. Contact Admin.');
             setLoading(false);
             return;
           }
 
-          const expectedPass = (matched.password || '').trim();
-          if (
-            expectedPass &&
-            expectedPass !== cleanPassword &&
-            expectedPass.toLowerCase() !== cleanPassword.toLowerCase()
-          ) {
-            setError('Invalid Password. Please check the password configured by Admin.');
+          const validCandidate = matchedCandidates.find((cand) => {
+            const expectedPass = (cand.password || '').trim();
+            return (
+              !expectedPass ||
+              expectedPass === cleanPassword ||
+              expectedPass.toLowerCase() === cleanPassword.toLowerCase()
+            );
+          });
+
+          if (!validCandidate) {
+            setError('Invalid Password. Please check the password configured in User Management.');
             setLoading(false);
             return;
           }
 
-          authenticatedUser = matched;
+          authenticatedUser = {
+            ...primaryMatched,
+            ...validCandidate,
+            password: cleanPassword,
+          };
         } else {
           // Check if this email is assigned to any project in the sheet
           const allLeads = loadLeads();
@@ -225,13 +258,14 @@ export function LoginPage({
               role: 'Sales Executive',
               status: 'Active',
               phone: '',
+              updatedAt: Date.now(),
               lastActive: 'Just now',
               createdAt: new Date().toISOString().split('T')[0],
             };
             const updatedUsers = mergeUsersList(combinedList, [authenticatedUser]);
             saveUsers(updatedUsers, true);
           } else {
-            setError('Access Denied: This email is not registered in DCPL Solar CRM. Contact Admin.');
+            setError('Access Denied: This Email / User ID is not registered in DCPL Solar CRM. Please add it in User Management.');
             setLoading(false);
             return;
           }
@@ -284,20 +318,20 @@ export function LoginPage({
         <form onSubmit={handleLogin} className="space-y-4">
           <div>
             <label className="block text-slate-300 text-xs font-semibold mb-1.5">
-              Registered Email Address
+              Registered Email Address / User ID
             </label>
             <div className="relative">
               <Mail className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
               <input
-                type="email"
+                type="text"
                 required
-                autoComplete="email"
+                autoComplete="username"
                 value={email}
                 onChange={(e) => {
                   setEmail(e.target.value);
                   setError('');
                 }}
-                placeholder="name@dcplsolar.com"
+                placeholder="name@dcplsolar.com or User ID / Phone"
                 className="w-full bg-slate-900/90 border border-slate-700 rounded-xl pl-10 pr-4 py-2.5 text-xs text-white placeholder:text-slate-500 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-colors"
               />
             </div>
