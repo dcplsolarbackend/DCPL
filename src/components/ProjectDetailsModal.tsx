@@ -610,6 +610,89 @@ export const ProjectDetailsModal: React.FC<ProjectDetailsModalProps> = ({
       );
     }
 
+    if (fieldKey === 'paymentReceived') {
+      return (
+        <div key={fieldKey} className="space-y-2 sm:col-span-2 p-3.5 bg-emerald-50/60 border border-emerald-200 rounded-xl">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <label className="font-bold text-emerald-950 text-xs flex items-center gap-1.5">
+              <Receipt className="w-4 h-4 text-emerald-600 shrink-0" />
+              <span>
+                {label} <span className="text-rose-600 font-bold">*</span>
+              </span>
+              <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 font-semibold">
+                Auto-Summed from {leadPayments.length} Payment Sheet Entry(s) (LeadID: {formData.leadId})
+              </span>
+            </label>
+            <button
+              type="button"
+              onClick={() => setActiveTab('payments')}
+              className="text-[11px] font-semibold text-emerald-700 hover:text-emerald-900 underline cursor-pointer"
+            >
+              View All {leadPayments.length} Payment Sheet Rows →
+            </button>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+            <div>
+              <span className="block text-[10px] font-semibold text-slate-600 mb-0.5">
+                Total Received from Payment Sheet (₹)
+              </span>
+              <input
+                type="number"
+                readOnly={leadPayments.length > 0}
+                value={formData.paymentReceived || 0}
+                onChange={(e) => updateFieldValue('paymentReceived', e.target.value)}
+                className="w-full px-3 py-2 bg-white border border-emerald-300 rounded-lg font-mono font-bold text-emerald-800 text-xs"
+              />
+            </div>
+            <div>
+              <span className="block text-[10px] font-semibold text-slate-600 mb-0.5">
+                Quick Add Payment to Payment Sheet (₹)
+              </span>
+              <div className="flex gap-1.5">
+                <input
+                  type="number"
+                  placeholder="Enter amount ₹..."
+                  value={newPayAmount}
+                  onChange={(e) => setNewPayAmount(e.target.value ? Number(e.target.value) : '')}
+                  className={`flex-1 px-2.5 py-2 bg-white border rounded-lg font-mono text-xs ${
+                    isMissing ? 'border-rose-500 ring-2 ring-rose-500/20' : 'border-slate-300'
+                  }`}
+                />
+                <select
+                  value={newPayType}
+                  onChange={(e) => setNewPayType(e.target.value)}
+                  className="px-2 py-2 bg-white border border-slate-300 rounded-lg text-xs font-medium"
+                >
+                  <option value="UPI">UPI</option>
+                  <option value="Cash">Cash</option>
+                  <option value="RTGS/NEFT">RTGS</option>
+                  <option value="Loan">Loan</option>
+                  <option value="Cheque">Cheque</option>
+                </select>
+              </div>
+            </div>
+            <div className="flex flex-col justify-end">
+              <button
+                type="button"
+                onClick={handleAddInlinePaymentToSheet}
+                className="w-full py-2 px-3 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold rounded-lg text-xs flex items-center justify-center gap-1.5 cursor-pointer shadow-2xs"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>Add to Payment Sheet</span>
+              </button>
+            </div>
+          </div>
+          {payAddedBanner && (
+            <div className="text-[11px] text-emerald-800 font-semibold flex items-center gap-1.5 pt-1">
+              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+              <span>{payAddedBanner}</span>
+            </div>
+          )}
+        </div>
+      );
+    }
+
     if (def?.inputType === 'textarea') {
       return (
         <div key={fieldKey} className="space-y-1 sm:col-span-2">
@@ -1117,34 +1200,59 @@ export const ProjectDetailsModal: React.FC<ProjectDetailsModalProps> = ({
                 )}
               </div>
 
-              {/* Financial Balance Summary */}
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 p-3 bg-slate-50 rounded-xl border border-slate-200">
-                <div>
-                  <label className="block font-semibold text-slate-700 mb-1">Deal Amount (₹) (Col 23)</label>
-                  <input
-                    type="number"
-                    value={formData.dealAmount || 0}
-                    onChange={(e) => updateFieldValue('dealAmount', e.target.value)}
-                    className="w-full px-3 py-2 border border-slate-300 rounded-lg font-mono"
-                  />
+              {/* Financial Balance Summary (Calculated from Payment Sheet by LeadID) */}
+              <div className="p-3.5 bg-emerald-50/50 rounded-xl border border-emerald-200 space-y-2.5">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-1.5">
+                    <Receipt className="w-4 h-4 text-emerald-600" />
+                    <span className="font-bold text-slate-900 text-xs">
+                      Financial Summary (Linked to Payment Sheet via LeadID: <span className="font-mono text-indigo-700">{formData.leadId}</span>)
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab('payments')}
+                    className="inline-flex items-center gap-1 px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold rounded-lg text-[11px] cursor-pointer shadow-2xs"
+                  >
+                    <Plus className="w-3 h-3" />
+                    <span>+ Add / View Payment Sheet ({leadPayments.length})</span>
+                  </button>
                 </div>
-                <div>
-                  <label className="block font-semibold text-slate-700 mb-1">Payment Received (₹) (Col 38)</label>
-                  <input
-                    type="number"
-                    value={formData.paymentReceived || 0}
-                    onChange={(e) => updateFieldValue('paymentReceived', e.target.value)}
-                    className="w-full px-3 py-2 border border-slate-300 rounded-lg font-mono"
-                  />
-                </div>
-                <div>
-                  <label className="block font-semibold text-slate-700 mb-1">Due Amount (₹) (Col 39)</label>
-                  <input
-                    type="number"
-                    readOnly
-                    value={formData.duePayment || 0}
-                    className="w-full px-3 py-2 bg-rose-50 border border-rose-200 rounded-lg font-mono font-bold text-rose-700"
-                  />
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div>
+                    <label className="block font-semibold text-slate-700 mb-1">Deal Amount (₹) (Col 23)</label>
+                    <input
+                      type="number"
+                      value={formData.dealAmount || 0}
+                      onChange={(e) => updateFieldValue('dealAmount', e.target.value)}
+                      className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg font-mono"
+                    />
+                  </div>
+                  <div>
+                    <label className="block font-semibold text-slate-700 mb-1 flex items-center justify-between">
+                      <span>Payment Received (₹) (Col 38)</span>
+                      <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-emerald-100 text-emerald-800">
+                        {leadPayments.length} {leadPayments.length === 1 ? 'entry' : 'entries'}
+                      </span>
+                    </label>
+                    <input
+                      type="number"
+                      readOnly={leadPayments.length > 0}
+                      value={formData.paymentReceived || 0}
+                      onChange={(e) => updateFieldValue('paymentReceived', e.target.value)}
+                      className="w-full px-3 py-2 bg-emerald-50 border border-emerald-300 rounded-lg font-mono font-bold text-emerald-800"
+                    />
+                  </div>
+                  <div>
+                    <label className="block font-semibold text-slate-700 mb-1">Due Amount (₹) (Col 39)</label>
+                    <input
+                      type="number"
+                      readOnly
+                      value={formData.duePayment || 0}
+                      className="w-full px-3 py-2 bg-rose-50 border border-rose-200 rounded-lg font-mono font-bold text-rose-700"
+                    />
+                  </div>
                 </div>
               </div>
 
@@ -1544,53 +1652,232 @@ export const ProjectDetailsModal: React.FC<ProjectDetailsModalProps> = ({
             </div>
           )}
 
-          {/* TAB 5: Payment History */}
+          {/* TAB 5: Payment History & Direct Payment Sheet Entry (Linked by LeadID) */}
           {activeTab === 'payments' && (
             <div className="space-y-4">
-              <div className="flex items-center justify-between">
+              {/* Summary Bar */}
+              <div className="p-3.5 bg-slate-900 text-white rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                 <div>
-                  <h4 className="font-bold text-slate-900">Payment History for Lead {formData.leadId}</h4>
-                  <p className="text-[11px] text-slate-500">
-                    Total Deal: ₹{formData.dealAmount?.toLocaleString('en-IN') || 0} | Paid: ₹{formData.paymentReceived?.toLocaleString('en-IN') || 0} | Due: ₹{formData.duePayment?.toLocaleString('en-IN') || 0}
+                  <div className="flex items-center gap-2">
+                    <Receipt className="w-4 h-4 text-emerald-400" />
+                    <h4 className="font-bold text-xs">
+                      Payment Sheet Ledger for LeadID: <span className="font-mono text-emerald-400">{formData.leadId}</span>
+                    </h4>
+                  </div>
+                  <p className="text-[11px] text-slate-300 mt-0.5">
+                    Every payment added below is saved directly in the <strong>Payment Sheet</strong> with LeadID <strong>{formData.leadId}</strong> and automatically summed into this Lead's Payment Received.
                   </p>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => onAddPaymentForLead(formData.leadId!)}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 text-white font-medium rounded-lg hover:bg-emerald-700 cursor-pointer"
-                >
-                  <Plus className="w-3.5 h-3.5" />
-                  <span>Record Payment</span>
-                </button>
+
+                <div className="flex items-center gap-3 text-right shrink-0">
+                  <div className="px-2.5 py-1 rounded-lg bg-slate-800 border border-slate-700">
+                    <span className="block text-[9px] uppercase text-slate-400">Deal Amount</span>
+                    <span className="font-mono font-bold text-xs text-white">
+                      ₹{(Number(formData.dealAmount) || 0).toLocaleString('en-IN')}
+                    </span>
+                  </div>
+                  <div className="px-2.5 py-1 rounded-lg bg-emerald-950/80 border border-emerald-700">
+                    <span className="block text-[9px] uppercase text-emerald-300">Paid ({leadPayments.length} Rows)</span>
+                    <span className="font-mono font-bold text-xs text-emerald-400">
+                      ₹{(Number(formData.paymentReceived) || 0).toLocaleString('en-IN')}
+                    </span>
+                  </div>
+                  <div className="px-2.5 py-1 rounded-lg bg-rose-950/80 border border-rose-700">
+                    <span className="block text-[9px] uppercase text-rose-300">Due Balance</span>
+                    <span className="font-mono font-bold text-xs text-rose-400">
+                      ₹{(Number(formData.duePayment) || 0).toLocaleString('en-IN')}
+                    </span>
+                  </div>
+                </div>
               </div>
 
-              <div className="border border-slate-200 rounded-xl overflow-hidden">
+              {/* Inline Add Payment to Payment Sheet Form */}
+              <div className="p-4 bg-emerald-50/70 border-2 border-emerald-200 rounded-2xl space-y-3">
+                <div className="flex items-center justify-between">
+                  <h5 className="font-bold text-emerald-950 text-xs flex items-center gap-1.5">
+                    <Plus className="w-4 h-4 text-emerald-600" />
+                    <span>Add New Payment Entry to Payment Sheet (7 Columns — Linked by LeadID: {formData.leadId})</span>
+                  </h5>
+                  <button
+                    type="button"
+                    onClick={() => onAddPaymentForLead(formData.leadId!)}
+                    className="text-[11px] font-semibold text-emerald-700 hover:text-emerald-900 underline cursor-pointer"
+                  >
+                    Open Full Payment Sheet View →
+                  </button>
+                </div>
+
+                {payAddedBanner && (
+                  <div className="p-2.5 bg-emerald-100 border border-emerald-300 rounded-xl text-emerald-950 text-[11px] font-semibold flex items-center gap-2">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-700 shrink-0" />
+                    <span>{payAddedBanner}</span>
+                  </div>
+                )}
+
+                <div className="grid grid-cols-1 sm:grid-cols-4 gap-2.5">
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-700 mb-1">
+                      LeadID (Col 1)
+                    </label>
+                    <input
+                      type="text"
+                      readOnly
+                      value={formData.leadId || ''}
+                      className="w-full px-2.5 py-2 bg-slate-100 border border-slate-300 rounded-lg font-mono font-bold text-slate-700 text-xs"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-700 mb-1">
+                      Payment Date (Col 2) *
+                    </label>
+                    <input
+                      type="date"
+                      value={newPayDate}
+                      onChange={(e) => setNewPayDate(e.target.value)}
+                      className="w-full px-2.5 py-2 bg-white border border-slate-300 rounded-lg font-mono text-xs"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-700 mb-1">
+                      Payment Type (Col 3) *
+                    </label>
+                    <select
+                      value={newPayType}
+                      onChange={(e) => setNewPayType(e.target.value)}
+                      className="w-full px-2.5 py-2 bg-white border border-slate-300 rounded-lg text-xs font-semibold"
+                    >
+                      <option value="UPI">UPI</option>
+                      <option value="Cash">Cash</option>
+                      <option value="RTGS/NEFT">RTGS / NEFT</option>
+                      <option value="Cheque">Cheque</option>
+                      <option value="Loan">Bank Loan</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-700 mb-1">
+                      Amount (₹) (Col 4) *
+                    </label>
+                    <input
+                      type="number"
+                      placeholder="e.g. 25000"
+                      value={newPayAmount}
+                      onChange={(e) => setNewPayAmount(e.target.value ? Number(e.target.value) : '')}
+                      className="w-full px-2.5 py-2 bg-white border border-emerald-400 rounded-lg font-mono font-bold text-emerald-900 text-xs"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 items-end">
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-700 mb-1">
+                      Transaction ID / Ref (Col 5)
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="UTR / UPI Ref / Receipt No"
+                      value={newPayTxnId}
+                      onChange={(e) => setNewPayTxnId(e.target.value)}
+                      className="w-full px-2.5 py-2 bg-white border border-slate-300 rounded-lg font-mono text-xs"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-700 mb-1">
+                      Receipt Image / Drive Link (Col 6)
+                    </label>
+                    <div className="flex gap-1.5">
+                      <input
+                        type="text"
+                        placeholder="Paste link or upload..."
+                        value={newPayReceipt}
+                        onChange={(e) => setNewPayReceipt(e.target.value)}
+                        className="flex-1 px-2.5 py-2 bg-white border border-slate-300 rounded-lg font-mono text-[11px]"
+                      />
+                      <label className="px-2.5 py-2 bg-white hover:bg-slate-100 border border-slate-300 rounded-lg cursor-pointer inline-flex items-center justify-center shrink-0" title="Upload Receipt Image">
+                        <Upload className="w-3.5 h-3.5 text-slate-600" />
+                        <input type="file" accept="image/*" onChange={handleReceiptFileUpload} className="hidden" />
+                      </label>
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-700 mb-1">
+                      Remark (Col 7)
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="e.g. Booking advance / 2nd installment"
+                      value={newPayRemark}
+                      onChange={(e) => setNewPayRemark(e.target.value)}
+                      className="w-full px-2.5 py-2 bg-white border border-slate-300 rounded-lg text-xs"
+                    />
+                  </div>
+                </div>
+
+                <div className="flex justify-end pt-1">
+                  <button
+                    type="button"
+                    onClick={handleAddInlinePaymentToSheet}
+                    className="inline-flex items-center gap-1.5 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl text-xs cursor-pointer shadow-sm"
+                  >
+                    <Plus className="w-4 h-4" />
+                    <span>+ Add Payment Entry to Payment Sheet</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Payment Sheet Entries Table for this LeadID */}
+              <div className="border border-slate-200 rounded-xl overflow-hidden bg-white">
+                <div className="px-3.5 py-2 bg-slate-50 border-b border-slate-200 flex items-center justify-between text-[11px]">
+                  <span className="font-bold text-slate-800">
+                    Payment Sheet Entries Matching LeadID "{formData.leadId}" ({leadPayments.length})
+                  </span>
+                  <span className="font-mono font-bold text-emerald-700">
+                    Summed Total: ₹{summedPaymentSheetAmount.toLocaleString('en-IN')}
+                  </span>
+                </div>
                 <table className="w-full text-left border-collapse">
                   <thead>
                     <tr className="bg-slate-100 text-[11px] font-semibold text-slate-600 border-b border-slate-200">
-                      <th className="py-2.5 px-3">Date</th>
-                      <th className="py-2.5 px-3">Type</th>
-                      <th className="py-2.5 px-3 text-right">Amount (₹)</th>
-                      <th className="py-2.5 px-3">Transaction ID</th>
-                      <th className="py-2.5 px-3">Remark</th>
+                      <th className="py-2.5 px-3">LeadID (Col 1)</th>
+                      <th className="py-2.5 px-3">Date (Col 2)</th>
+                      <th className="py-2.5 px-3">Type (Col 3)</th>
+                      <th className="py-2.5 px-3 text-right">Amount ₹ (Col 4)</th>
+                      <th className="py-2.5 px-3">Transaction ID (Col 5)</th>
+                      <th className="py-2.5 px-3">Receipt (Col 6)</th>
+                      <th className="py-2.5 px-3">Remark (Col 7)</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 text-[11px]">
                     {leadPayments.length === 0 ? (
                       <tr>
-                        <td colSpan={5} className="py-6 text-center text-slate-400">
-                          No payments recorded yet for this project.
+                        <td colSpan={7} className="py-6 text-center text-slate-400">
+                          No payment rows in Payment Sheet yet for LeadID "{formData.leadId}". Use the form above to add a payment entry.
                         </td>
                       </tr>
                     ) : (
                       leadPayments.map((p) => (
                         <tr key={p.id} className="hover:bg-slate-50">
+                          <td className="py-2 px-3 font-mono font-bold text-indigo-700">{p.leadId}</td>
                           <td className="py-2 px-3 font-mono">{p.paymentDate}</td>
                           <td className="py-2 px-3 font-medium">{p.paymentType}</td>
                           <td className="py-2 px-3 text-right font-mono font-bold text-emerald-700">
-                            ₹{p.amount.toLocaleString('en-IN')}
+                            ₹{(Number(p.amount) || 0).toLocaleString('en-IN')}
                           </td>
-                          <td className="py-2 px-3 font-mono text-slate-500">{p.transactionId}</td>
+                          <td className="py-2 px-3 font-mono text-slate-500">{p.transactionId || '—'}</td>
+                          <td className="py-2 px-3">
+                            {p.receiptImage ? (
+                              <a
+                                href={p.receiptImage}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="inline-flex items-center gap-1 text-indigo-600 hover:underline font-medium"
+                              >
+                                <ImageIcon className="w-3 h-3" />
+                                <span>Receipt</span>
+                              </a>
+                            ) : (
+                              <span className="text-slate-400">—</span>
+                            )}
+                          </td>
                           <td className="py-2 px-3 text-slate-600">{p.remark || '—'}</td>
                         </tr>
                       ))

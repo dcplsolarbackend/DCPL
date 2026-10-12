@@ -163,11 +163,17 @@ export function loadSyncConfig(): SheetSyncConfig {
       const parsed = JSON.parse(raw);
       const fallbackUrl = localStorage.getItem('dcpl_apps_script_url') || '';
       const webAppUrl = parsed.webAppUrl || fallbackUrl;
+      const mainSheetName = parsed.mainSheetName || 'Main Project Sheet';
+      const paymentSheetName = parsed.paymentSheetName || 'Payment Sheet';
+      const defaultSheets = Array.from(new Set([mainSheetName, paymentSheetName, 'Main Project Sheet', 'Payment Sheet', 'Users']));
       return {
         webAppUrl,
         spreadsheetId: parsed.spreadsheetId || '',
-        mainSheetName: parsed.mainSheetName || 'Main Project Sheet',
-        paymentSheetName: parsed.paymentSheetName || 'Payment Sheet',
+        mainSheetName,
+        paymentSheetName,
+        availableSheets: Array.isArray(parsed.availableSheets) && parsed.availableSheets.length > 0
+          ? Array.from(new Set([...parsed.availableSheets, mainSheetName, paymentSheetName]))
+          : defaultSheets,
         driveFolderId: parsed.driveFolderId || '',
         autoSync: parsed.autoSync !== undefined ? Boolean(parsed.autoSync) : true,
         lastSyncedAt: parsed.lastSyncedAt || null,
@@ -183,6 +189,7 @@ export function loadSyncConfig(): SheetSyncConfig {
     spreadsheetId: '',
     mainSheetName: 'Main Project Sheet',
     paymentSheetName: 'Payment Sheet',
+    availableSheets: ['Main Project Sheet', 'Payment Sheet', 'Users'],
     driveFolderId: '',
     autoSync: true,
     lastSyncedAt: null,
@@ -214,7 +221,12 @@ export function saveSyncConfig(cfg: SheetSyncConfig, syncToServer = true): void 
  * `req.rowValues`, or exact Google Sheet Header keys, all 44 columns are mapped
  * starting from Column 1 (LeadID) into the exact next upcoming row.
  */
-export function buildSheetLeadPayload(lead: Lead, updatedBy: string) {
+export function buildSheetLeadPayload(
+  lead: Lead,
+  updatedBy: string,
+  mainSheetName = 'Main Project Sheet',
+  paymentSheetName = 'Payment Sheet'
+) {
   const nowTime = lead.lastModifiedTime || new Date().toLocaleString();
   const rowValues = [
     lead.leadId || '',
@@ -266,6 +278,9 @@ export function buildSheetLeadPayload(lead: Lead, updatedBy: string) {
   return {
     action: 'saveLead',
     insertMode: 'nextUpcomingRow',
+    mainSheetName,
+    paymentSheetName,
+    targetSheet: mainSheetName,
     lead: {
       ...lead,
       lastModifiedBy: updatedBy || lead.lastModifiedBy || '',
@@ -333,7 +348,13 @@ export function buildSheetLeadPayload(lead: Lead, updatedBy: string) {
  * Ensures the entry is added into the "Payment Sheet" linked by LeadID (Columns 1..7)
  * and triggers recalculation of the Lead's Payment Received & Due Amount in Main Project Sheet.
  */
-export function buildSheetPaymentPayload(payment: PaymentRecord, updatedLead?: Lead, updatedBy?: string) {
+export function buildSheetPaymentPayload(
+  payment: PaymentRecord,
+  updatedLead?: Lead,
+  updatedBy?: string,
+  mainSheetName = 'Main Project Sheet',
+  paymentSheetName = 'Payment Sheet'
+) {
   const rowValues = [
     payment.leadId || '',
     payment.paymentDate || '',
@@ -347,7 +368,9 @@ export function buildSheetPaymentPayload(payment: PaymentRecord, updatedLead?: L
   return {
     action: 'savePayment',
     insertMode: 'nextUpcomingRow',
-    targetSheet: 'Payment Sheet',
+    mainSheetName,
+    paymentSheetName,
+    targetSheet: paymentSheetName,
     payment: {
       ...payment,
       amount: Number(payment.amount) || 0,

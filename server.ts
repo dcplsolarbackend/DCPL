@@ -318,9 +318,15 @@ app.post('/api/auth/login', async (req, res) => {
 // Proxy for Google Apps Script Web App (avoids browser CORS issues on GET & POST)
 app.post('/api/sheet-proxy', async (req, res) => {
   try {
-    const { webAppUrl, method = 'POST', payload } = req.body || {};
+    const { webAppUrl, method = 'POST', payload, mainSheetName, paymentSheetName } = req.body || {};
     const store = readServerStore();
     const targetUrl = String(webAppUrl || store.syncConfig?.webAppUrl || '').trim();
+    const resolvedMainSheet = String(
+      mainSheetName || payload?.mainSheetName || store.syncConfig?.mainSheetName || 'Main Project Sheet'
+    ).trim();
+    const resolvedPaySheet = String(
+      paymentSheetName || payload?.paymentSheetName || store.syncConfig?.paymentSheetName || 'Payment Sheet'
+    ).trim();
 
     if (!targetUrl) {
       res.status(400).json({ status: 'error', message: 'Missing Google Apps Script Web App URL' });
@@ -328,7 +334,9 @@ app.post('/api/sheet-proxy', async (req, res) => {
     }
 
     if (method === 'GET') {
-      const response = await fetch(targetUrl, {
+      const separator = targetUrl.includes('?') ? '&' : '?';
+      const urlWithParams = `${targetUrl}${separator}mainSheet=${encodeURIComponent(resolvedMainSheet)}&paymentSheet=${encodeURIComponent(resolvedPaySheet)}`;
+      const response = await fetch(urlWithParams, {
         method: 'GET',
         redirect: 'follow',
       });
@@ -351,6 +359,17 @@ app.post('/api/sheet-proxy', async (req, res) => {
           }
           writeServerStore({ users: mergedUsers });
         }
+        if (Array.isArray(json.availableSheets) && json.availableSheets.length > 0) {
+          writeServerStore({
+            syncConfig: {
+              ...(store.syncConfig || {}),
+              webAppUrl: targetUrl,
+              mainSheetName: resolvedMainSheet,
+              paymentSheetName: resolvedPaySheet,
+              availableSheets: json.availableSheets,
+            },
+          });
+        }
         res.json(json);
       } catch {
         res.json({ status: 'raw', raw: text });
@@ -359,10 +378,15 @@ app.post('/api/sheet-proxy', async (req, res) => {
     }
 
     // POST to Google Apps Script
+    const enrichedPayload = {
+      ...(payload || {}),
+      mainSheetName: resolvedMainSheet,
+      paymentSheetName: resolvedPaySheet,
+    };
     const response = await fetch(targetUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      body: JSON.stringify(payload || {}),
+      body: JSON.stringify(enrichedPayload),
       redirect: 'follow',
     });
     const text = await response.text();

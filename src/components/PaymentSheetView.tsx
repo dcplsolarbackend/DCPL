@@ -20,6 +20,8 @@ interface PaymentSheetViewProps {
   leads: Lead[];
   onAddPayment: (record: PaymentRecord) => void;
   currentUser: User;
+  paymentSheetName?: string;
+  onOpenSheetSettings?: () => void;
 }
 
 export const PaymentSheetView: React.FC<PaymentSheetViewProps> = ({
@@ -27,6 +29,8 @@ export const PaymentSheetView: React.FC<PaymentSheetViewProps> = ({
   leads,
   onAddPayment,
   currentUser,
+  paymentSheetName = 'Payment Sheet',
+  onOpenSheetSettings,
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
@@ -106,11 +110,20 @@ export const PaymentSheetView: React.FC<PaymentSheetViewProps> = ({
       {/* Header Metric Bar */}
       <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <div className="flex items-center gap-2 text-indigo-600 font-semibold text-xs uppercase tracking-wider mb-1">
+          <div className="flex flex-wrap items-center gap-2 text-indigo-600 font-semibold text-xs uppercase tracking-wider mb-1">
             <Receipt className="w-4 h-4" />
-            <span>Google Sheet: Payment Sheet Ledger</span>
+            <span>Google Sheet Tab: {paymentSheetName}</span>
+            {onOpenSheetSettings && (
+              <button
+                type="button"
+                onClick={onOpenSheetSettings}
+                className="px-2 py-0.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 rounded-md text-[10px] font-bold normal-case cursor-pointer"
+              >
+                Change Payment Sheet Tab
+              </button>
+            )}
           </div>
-          <h2 className="text-xl font-bold text-slate-900">Payment Details & Receipt Records</h2>
+          <h2 className="text-xl font-bold text-slate-900">Payment Details &amp; Receipt Records (Linked by LeadID)</h2>
           <p className="text-xs text-slate-500 mt-0.5">
             Columns: LeadID · Payment Date · Payment Type · Amount · Transaction ID · Receipt Image · Remark
           </p>

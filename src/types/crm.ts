@@ -164,6 +164,7 @@ export interface SheetSyncConfig {
   spreadsheetId?: string;
   mainSheetName: string;
   paymentSheetName: string;
+  availableSheets?: string[];
   driveFolderId?: string;
   autoSync: boolean;
   lastSyncedAt: string | null;

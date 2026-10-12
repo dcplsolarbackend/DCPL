@@ -18,6 +18,10 @@ import {
   loadSyncConfig, 
   saveSyncConfig,
   buildSheetLeadPayload,
+  buildSheetPaymentPayload,
+  reconcileLeadsWithPayments,
+  mergePaymentsList,
+  normalizeLeadId,
   exportToGoogleSheetCsv,
   downloadCsv
 } from './utils/storage';
@@ -67,8 +71,8 @@ import { RotateCcw, CheckCircle2, ShieldAlert } from 'lucide-react';
 const PUBLIC_APP_URL = 'https://ais-pre-5lwgbql5dcxvmg5zo645wl-134919990515.asia-southeast1.run.app';
 
 export default function App() {
-  const [leads, setLeads] = useState<Lead[]>(() => loadLeads());
   const [payments, setPayments] = useState<PaymentRecord[]>(() => loadPayments());
+  const [leads, setLeads] = useState<Lead[]>(() => reconcileLeadsWithPayments(loadLeads(), loadPayments()));
   const [users, setUsers] = useState<User[]>(() => loadUsers());
   // Persist login on device across page refreshes for 5 days or until explicit logout
   const [currentUser, setCurrentUserState] = useState<User | null>(() => getStoredUser(loadUsers()));
@@ -84,6 +88,7 @@ export default function App() {
 
   // Modals state
   const [isProjectModalOpen, setIsProjectModalOpen] = useState(false);
+  const [projectModalInitialTab, setProjectModalInitialTab] = useState<'stage' | 'info' | 'technical' | 'dates' | 'files' | 'payments'>('stage');
   const [editingLead, setEditingLead] = useState<Lead | null>(null);
   const [isWhatsAppModalOpen, setIsWhatsAppModalOpen] = useState(false);
   const [whatsAppLead, setWhatsAppLead] = useState<Lead | null>(null);
@@ -191,7 +196,9 @@ export default function App() {
     const targetUrl = (syncConfig.webAppUrl || '').trim();
     if (!targetUrl) return;
 
-    const payload = buildSheetLeadPayload(leadToPush, userEmail);
+    const activeMainSheet = syncConfig.mainSheetName || 'Main Project Sheet';
+    const activePaySheet = syncConfig.paymentSheetName || 'Payment Sheet';
+    const payload = buildSheetLeadPayload(leadToPush, userEmail, activeMainSheet, activePaySheet);
 
     // 1. Send via backend proxy to follow Apps Script redirects cleanly
     fetch('/api/sheet-proxy', {
@@ -200,6 +207,8 @@ export default function App() {
       body: JSON.stringify({
         webAppUrl: targetUrl,
         method: 'POST',
+        mainSheetName: activeMainSheet,
+        paymentSheetName: activePaySheet,
         payload,
       }),
     }).catch(() => {
@@ -211,7 +220,7 @@ export default function App() {
         body: JSON.stringify(payload),
       }).catch((e) => console.log('Sync queued:', e));
     });
-  }, [syncConfig.webAppUrl]);
+  }, [syncConfig.webAppUrl, syncConfig.mainSheetName, syncConfig.paymentSheetName]);
 
   // Save Lead (Add or Edit)
   const handleSaveLead = (lead: Lead) => {
@@ -262,51 +271,59 @@ export default function App() {
     pushLeadToGoogleSheet(leadWithMeta, currentUser.email);
   };
 
-  // Add Payment Record
+  // Add Payment Record (Saves into Payment Sheet by LeadID & sums into Lead's Payment Received)
   const handleAddPayment = (newPay: PaymentRecord) => {
     if (!currentUser) return;
+    let nextPaymentsList: PaymentRecord[] = [];
     setPayments((prev) => {
       const updated = [newPay, ...prev];
+      nextPaymentsList = updated;
       savePayments(updated);
       return updated;
     });
 
-    // Recalculate lead payment totals
+    // Recalculate lead payment totals by summing all Payment Sheet entries for this LeadID
     setLeads((prev) => {
-      const target = prev.find((l) => l.leadId === newPay.leadId);
+      const normId = normalizeLeadId(newPay.leadId);
+      const target = prev.find((l) => normalizeLeadId(l.leadId) === normId);
       if (!target) return prev;
 
-      const currentReceived = target.paymentReceived || 0;
-      const newReceived = currentReceived + newPay.amount;
-      const deal = target.dealAmount || 0;
-      const newDue = Math.max(0, deal - newReceived);
+      const allPaysForLead = (nextPaymentsList.length > 0 ? nextPaymentsList : [newPay, ...payments]).filter(
+        (p) => normalizeLeadId(p.leadId) === normId
+      );
+      const summedPaid = allPaysForLead.reduce((sum, p) => sum + (Number(p.amount) || 0), 0);
+      const deal = Number(target.dealAmount) || 0;
+      const newDue = Math.max(0, deal - summedPaid);
 
       const updatedLead: Lead = {
         ...target,
-        paymentReceived: newReceived,
+        paymentReceived: summedPaid,
         duePayment: newDue,
         lastModifiedBy: currentUser.email,
         lastModifiedTime: new Date().toLocaleString(),
       };
 
-      const updatedList = prev.map((l) => (l.leadId === newPay.leadId ? updatedLead : l));
+      const updatedList = prev.map((l) => (normalizeLeadId(l.leadId) === normId ? updatedLead : l));
       saveLeads(updatedList);
 
       if (syncConfig.webAppUrl) {
-        const payPayload = {
-          action: 'savePayment',
-          insertMode: 'nextUpcomingRow',
-          payment: newPay,
-          ...newPay,
-          lead: updatedLead,
-          updatedBy: currentUser.email,
-        };
+        const activeMainSheet = syncConfig.mainSheetName || 'Main Project Sheet';
+        const activePaySheet = syncConfig.paymentSheetName || 'Payment Sheet';
+        const payPayload = buildSheetPaymentPayload(
+          newPay,
+          updatedLead,
+          currentUser.email,
+          activeMainSheet,
+          activePaySheet
+        );
         fetch('/api/sheet-proxy', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             webAppUrl: syncConfig.webAppUrl,
             method: 'POST',
+            mainSheetName: activeMainSheet,
+            paymentSheetName: activePaySheet,
             payload: payPayload,
           }),
         }).catch(() => {
@@ -322,7 +339,7 @@ export default function App() {
       return updatedList;
     });
 
-    const leadObj = leads.find((l) => l.leadId === newPay.leadId);
+    const leadObj = leads.find((l) => normalizeLeadId(l.leadId) === normalizeLeadId(newPay.leadId));
 
     const log = logActivity({
       userEmail: currentUser.email,
@@ -331,25 +348,27 @@ export default function App() {
       action: 'RECORD_PAYMENT',
       leadId: newPay.leadId,
       leadName: leadObj?.customerName,
-      details: `${currentUser.name} recorded payment of ₹${newPay.amount.toLocaleString('en-IN')}`,
+      details: `${currentUser.name} added ₹${newPay.amount.toLocaleString('en-IN')} to Payment Sheet (LeadID: ${newPay.leadId})`,
     });
     setActivityLogs((prev) => [log, ...prev]);
 
     const notif = addNotification({
-      title: 'Payment Received',
-      message: `₹${newPay.amount.toLocaleString('en-IN')} received for ${leadObj?.customerName || newPay.leadId}`,
+      title: 'Payment Added to Payment Sheet',
+      message: `₹${newPay.amount.toLocaleString('en-IN')} added in Payment Sheet for ${leadObj?.customerName || newPay.leadId}`,
       type: 'payment_due',
       targetLeadId: newPay.leadId,
     });
     setNotifications((prev) => [notif, ...prev]);
 
-    showToast(`Payment of ₹${newPay.amount.toLocaleString('en-IN')} recorded.`);
+    showToast(`₹${newPay.amount.toLocaleString('en-IN')} added to Payment Sheet (LeadID: ${newPay.leadId}).`);
   };
 
   // Two-way synchronization handler (supports both manual and silent background Auto-Sync)
   const handleTriggerTwoWaySync = useCallback(async (silent = false) => {
     if (!currentUser) return;
     const targetUrl = (syncConfig.webAppUrl || '').trim();
+    const activeMainSheet = syncConfig.mainSheetName || 'Main Project Sheet';
+    const activePaySheet = syncConfig.paymentSheetName || 'Payment Sheet';
     if (!targetUrl) {
       if (!silent) {
         showToast('Please enter your Google Apps Script URL first.');
@@ -370,25 +389,34 @@ export default function App() {
           body: JSON.stringify({
             webAppUrl: targetUrl,
             method: 'GET',
+            mainSheetName: activeMainSheet,
+            paymentSheetName: activePaySheet,
           }),
         });
         if (proxyRes.ok) {
           json = await proxyRes.json();
         }
       } catch {
-        const res = await fetch(targetUrl, { method: 'GET', mode: 'cors' });
+        const sep = targetUrl.includes('?') ? '&' : '?';
+        const res = await fetch(
+          `${targetUrl}${sep}mainSheet=${encodeURIComponent(activeMainSheet)}&paymentSheet=${encodeURIComponent(activePaySheet)}`,
+          { method: 'GET', mode: 'cors' }
+        );
         json = await res.json();
       }
 
       if (json && json.leads && Array.isArray(json.leads)) {
-        if (json.leads.length > 0) {
-          setLeads(json.leads);
-          saveLeads(json.leads);
+        let resolvedPayments = payments;
+        if (json.payments && Array.isArray(json.payments) && json.payments.length > 0) {
+          resolvedPayments = mergePaymentsList(payments, json.payments);
+          setPayments(resolvedPayments);
+          savePayments(resolvedPayments);
         }
 
-        if (json.payments && Array.isArray(json.payments) && json.payments.length > 0) {
-          setPayments(json.payments);
-          savePayments(json.payments);
+        if (json.leads.length > 0) {
+          const reconciledLeads = reconcileLeadsWithPayments(json.leads, resolvedPayments);
+          setLeads(reconciledLeads);
+          saveLeads(reconciledLeads);
         }
 
         if (json.users && Array.isArray(json.users) && json.users.length > 0) {
@@ -401,7 +429,20 @@ export default function App() {
 
         const nowIso = new Date().toISOString();
         setSyncConfig((prev) => {
-          const updatedCfg = { ...prev, lastSyncedAt: nowIso };
+          const incomingTabs = Array.isArray(json.availableSheets) ? json.availableSheets : [];
+          const mergedTabs = Array.from(
+            new Set([
+              ...incomingTabs,
+              ...(prev.availableSheets || []),
+              prev.mainSheetName || 'Main Project Sheet',
+              prev.paymentSheetName || 'Payment Sheet',
+            ].filter(Boolean))
+          );
+          const updatedCfg = {
+            ...prev,
+            availableSheets: mergedTabs,
+            lastSyncedAt: nowIso,
+          };
           saveSyncConfig(updatedCfg);
           return updatedCfg;
         });
@@ -412,10 +453,10 @@ export default function App() {
             userName: currentUser.name,
             userRole: currentUser.role,
             action: 'SHEET_SYNC',
-            details: `2-Way sync pulled ${json.leads.length} projects & ${json.payments?.length || 0} payments from Sheet.`,
+            details: `2-Way sync pulled ${json.leads.length} projects (${activeMainSheet}) & ${json.payments?.length || 0} payments (${activePaySheet}).`,
           });
           setActivityLogs((prev) => [log, ...prev]);
-          showToast(`Pulled ${json.leads.length} projects & ${json.payments?.length || 0} payments from Google Sheet!`);
+          showToast(`Synced ${json.leads.length} projects (${activeMainSheet}) & ${json.payments?.length || 0} payments (${activePaySheet})!`);
         }
       } else if (!silent) {
         // Fallback post on manual trigger
@@ -425,8 +466,12 @@ export default function App() {
           body: JSON.stringify({
             webAppUrl: targetUrl,
             method: 'POST',
+            mainSheetName: activeMainSheet,
+            paymentSheetName: activePaySheet,
             payload: {
               action: 'syncBatch',
+              mainSheetName: activeMainSheet,
+              paymentSheetName: activePaySheet,
               leads: leads,
               payments: payments,
               users: users,
@@ -445,6 +490,8 @@ export default function App() {
             headers: { 'Content-Type': 'text/plain;charset=utf-8' },
             body: JSON.stringify({
               action: 'syncBatch',
+              mainSheetName: activeMainSheet,
+              paymentSheetName: activePaySheet,
               leads: leads,
               payments: payments,
               users: users,
@@ -460,7 +507,7 @@ export default function App() {
       isSyncingRef.current = false;
       setIsSyncing(false);
     }
-  }, [currentUser, syncConfig.webAppUrl, leads, payments, users]);
+  }, [currentUser, syncConfig.webAppUrl, syncConfig.mainSheetName, syncConfig.paymentSheetName, leads, payments, users]);
 
   // Automatic Background Sync (Auto-Sync when settings/URL are valid)
   useEffect(() => {
@@ -778,15 +825,24 @@ export default function App() {
             <div className="space-y-4">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                 <div>
-                  <h2 className="text-base font-bold text-slate-900">
-                    {selectedStageFilter === 'All' 
-                      ? (isSales(currentUser?.role) ? 'My Assigned Leads' : 'Main Project Sheet (Master Data)') 
-                      : `${selectedStageFilter} Projects`}
-                  </h2>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <h2 className="text-base font-bold text-slate-900">
+                      {selectedStageFilter === 'All' 
+                        ? (isSales(currentUser?.role) ? 'My Assigned Leads' : `Main Sheet: ${syncConfig.mainSheetName || 'Main Project Sheet'}`) 
+                        : `${selectedStageFilter} Projects`}
+                    </h2>
+                    <button
+                      type="button"
+                      onClick={() => setIsSyncModalOpen(true)}
+                      className="px-2 py-0.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 rounded-md text-[10px] font-bold cursor-pointer"
+                    >
+                      Change Main / Payment Sheet Tab
+                    </button>
+                  </div>
                   <p className="text-xs text-slate-500">
                     {isSales(currentUser?.role) 
                       ? 'Viewing leads assigned to your sales account. Changes synchronize with the master Google Sheet.' 
-                      : 'Exact 44 columns mapped to your live Google Sheet. Click any row to view complete technical details.'}
+                      : `Exact 44 columns mapped to "${syncConfig.mainSheetName || 'Main Project Sheet'}" & payments summed from "${syncConfig.paymentSheetName || 'Payment Sheet'}".`}
                   </p>
                 </div>
 
@@ -811,6 +867,7 @@ export default function App() {
                 leads={roleFilteredLeads}
                 onEditLead={(lead) => {
                   setEditingLead(lead);
+                  setProjectModalInitialTab('stage');
                   setIsProjectModalOpen(true);
                 }}
                 onDeleteLead={handleDeleteLead}
@@ -886,6 +943,8 @@ export default function App() {
               leads={roleFilteredLeads}
               onAddPayment={handleAddPayment}
               currentUser={currentUser}
+              paymentSheetName={syncConfig.paymentSheetName || 'Payment Sheet'}
+              onOpenSheetSettings={() => setIsSyncModalOpen(true)}
             />
           )}
 
@@ -941,16 +1000,22 @@ export default function App() {
       {/* 44-Column Project Details Modal */}
       <ProjectDetailsModal
         isOpen={isProjectModalOpen}
-        onClose={() => setIsProjectModalOpen(false)}
+        onClose={() => {
+          setIsProjectModalOpen(false);
+          setProjectModalInitialTab('stage');
+        }}
         lead={editingLead}
         onSaveLead={handleSaveLead}
         payments={payments}
+        onAddPayment={handleAddPayment}
         onAddPaymentForLead={() => {
           setCurrentView('payments');
           setIsProjectModalOpen(false);
+          setProjectModalInitialTab('stage');
         }}
         currentUser={currentUser}
         users={users}
+        initialTab={projectModalInitialTab}
       />
 
       {/* WhatsApp Quick Message Modal */}
@@ -967,12 +1032,19 @@ export default function App() {
         leads={leads}
         payments={payments}
         onImportLeads={(importedLeads) => {
-          setLeads(importedLeads);
-          saveLeads(importedLeads);
+          const reconciled = reconcileLeadsWithPayments(importedLeads, payments);
+          setLeads(reconciled);
+          saveLeads(reconciled);
         }}
         onImportPayments={(importedPayments) => {
-          setPayments(importedPayments);
-          savePayments(importedPayments);
+          const mergedPays = mergePaymentsList(payments, importedPayments);
+          setPayments(mergedPays);
+          savePayments(mergedPays);
+          setLeads((prevLeads) => {
+            const reconciled = reconcileLeadsWithPayments(prevLeads, mergedPays);
+            saveLeads(reconciled);
+            return reconciled;
+          });
         }}
         syncConfig={syncConfig}
         onSaveSyncConfig={(cfg) => {

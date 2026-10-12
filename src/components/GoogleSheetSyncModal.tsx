@@ -37,24 +37,29 @@ interface GoogleSheetSyncModalProps {
   currentUser: User;
 }
 
-const APPS_SCRIPT_CODE_DRIVE_SHEET = `// =========================================================================
+function buildAppsScriptCode(mainSheetDefault = 'Main Project Sheet', paymentSheetDefault = 'Payment Sheet') {
+  return `// =========================================================================
 // DCPL Solar CRM - Google Apps Script (Code.gs)
-// Handles "Main Project Sheet" (44 Columns) + "Payment Sheet" (7 Columns)
+// Handles "${mainSheetDefault}" (44 Columns) + "${paymentSheetDefault}" (7 Columns)
 // + "Users" Sheet (Multi-System Login) + Direct Google Drive PDF Uploads
 // =========================================================================
 
-var MAIN_SHEET_NAME = "Main Project Sheet";
-var PAYMENT_SHEET_NAME = "Payment Sheet";
+var MAIN_SHEET_NAME = ${JSON.stringify(mainSheetDefault)};
+var PAYMENT_SHEET_NAME = ${JSON.stringify(paymentSheetDefault)};
 var USERS_SHEET_NAME = "Users";
 var DRIVE_FOLDER_NAME = "DCPL Solar CRM Documents";
 
-// 1. GET: Fetch Main Project Sheet, Payment Sheet & Users Sheet data
+// 1. GET: Fetch Main Project Sheet, Payment Sheet, Users Sheet & Available Tabs
 function doGet(e) {
   try {
     var ss = SpreadsheetApp.getActiveSpreadsheet();
-    var mainSheet = getOrCreateMainSheet(ss);
-    var paySheet = getOrCreatePaymentSheet(ss);
+    var requestedMain = (e && e.parameter && e.parameter.mainSheet) ? String(e.parameter.mainSheet).trim() : MAIN_SHEET_NAME;
+    var requestedPay = (e && e.parameter && e.parameter.paymentSheet) ? String(e.parameter.paymentSheet).trim() : PAYMENT_SHEET_NAME;
+    
+    var mainSheet = getOrCreateMainSheet(ss, requestedMain);
+    var paySheet = getOrCreatePaymentSheet(ss, requestedPay);
     var usersSheet = getOrCreateUsersSheet(ss);
+    var availableSheets = ss.getSheets().map(function(s) { return s.getName(); });
     
     // Step A: Read Payment Sheet first and sum payments by LeadID
     var payData = paySheet.getDataRange().getValues();
@@ -178,6 +183,9 @@ function doGet(e) {
     return ContentService.createTextOutput(JSON.stringify({
       status: "success",
       timestamp: new Date().toISOString(),
+      availableSheets: availableSheets,
+      mainSheetName: mainSheet.getName(),
+      paymentSheetName: paySheet.getName(),
       leads: leads,
       payments: payments,
       users: users
@@ -189,11 +197,21 @@ function doGet(e) {
   }
 }
 
-// 2. POST: Save Lead (into exact next upcoming row), Record Payment in Payment Sheet, Sync Users, or Login
+// 2. POST: Save Lead (into exact next upcoming row), Record Payment in Payment Sheet, Sync Users, List Sheets, or Login
 function doPost(e) {
   try {
     var req = JSON.parse(e.postData.contents);
     var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var requestedMain = String(req.mainSheetName || req.targetSheet || MAIN_SHEET_NAME).trim();
+    var requestedPay = String(req.paymentSheetName || PAYMENT_SHEET_NAME).trim();
+
+    // Action 0: List Available Sheet Tabs in Spreadsheet
+    if (req.action === "getSheets") {
+      return ContentService.createTextOutput(JSON.stringify({
+        status: "success",
+        availableSheets: ss.getSheets().map(function(s) { return s.getName(); })
+      })).setMimeType(ContentService.MimeType.JSON);
+    }
     
     // Action 1: Upload file to Google Drive and return Drive Web Link
     if (req.action === "uploadFile") {
@@ -210,24 +228,25 @@ function doPost(e) {
       })).setMimeType(ContentService.MimeType.JSON);
     }
     
-    // Action 2: Save or Update Lead in Main Project Sheet (Exact Next Upcoming Row, Columns 1..44)
+    // Action 2: Save or Update Lead in Selected Main Sheet (Exact Next Upcoming Row, Columns 1..44)
     if (req.action === "saveLead" || (!req.action && (req.leadId || req["LeadID"] || req.lead))) {
-      var mainSheet = getOrCreateMainSheet(ss);
-      var paySheetForLead = getOrCreatePaymentSheet(ss);
+      var mainSheet = getOrCreateMainSheet(ss, requestedMain);
+      var paySheetForLead = getOrCreatePaymentSheet(ss, requestedPay);
       var leadObj = req.lead || req;
       var savedRow = saveSingleLead(mainSheet, leadObj, req.updatedBy);
       updateLeadPaymentTotals(mainSheet, paySheetForLead, leadObj.leadId || leadObj["LeadID"]);
       return ContentService.createTextOutput(JSON.stringify({
         status: "success",
         leadId: leadObj.leadId || leadObj["LeadID"],
+        sheetName: mainSheet.getName(),
         row: savedRow
       })).setMimeType(ContentService.MimeType.JSON);
     }
 
     // Action 2B: Batch Sync
     if (req.action === "syncBatch") {
-      var mainSheetBatch = getOrCreateMainSheet(ss);
-      var paySheetBatch = getOrCreatePaymentSheet(ss);
+      var mainSheetBatch = getOrCreateMainSheet(ss, requestedMain);
+      var paySheetBatch = getOrCreatePaymentSheet(ss, requestedPay);
       if (req.payments && req.payments.length) {
         for (var pIdx = 0; pIdx < req.payments.length; pIdx++) {
           saveSinglePaymentToSheet(paySheetBatch, req.payments[pIdx]);
@@ -243,14 +262,18 @@ function doPost(e) {
         var uSheetBatch = getOrCreateUsersSheet(ss);
         saveUsersToSheet(uSheetBatch, req.users);
       }
-      return ContentService.createTextOutput(JSON.stringify({ status: "success" }))
-        .setMimeType(ContentService.MimeType.JSON);
+      return ContentService.createTextOutput(JSON.stringify({
+        status: "success",
+        availableSheets: ss.getSheets().map(function(s) { return s.getName(); }),
+        mainSheetName: mainSheetBatch.getName(),
+        paymentSheetName: paySheetBatch.getName()
+      })).setMimeType(ContentService.MimeType.JSON);
     }
     
-    // Action 3: Save Payment record in Payment Sheet by LeadID (Exact Next Upcoming Row, Columns 1..7)
+    // Action 3: Save Payment record in Selected Payment Sheet by LeadID (Exact Next Upcoming Row, Columns 1..7)
     if (req.action === "savePayment") {
-      var paySheet = getOrCreatePaymentSheet(ss);
-      var mainSheetForPay = getOrCreateMainSheet(ss);
+      var paySheet = getOrCreatePaymentSheet(ss, requestedPay);
+      var mainSheetForPay = getOrCreateMainSheet(ss, req.mainSheetName || MAIN_SHEET_NAME);
       var p = req.payment || req;
       var targetPayRow = saveSinglePaymentToSheet(paySheet, p);
       
@@ -261,6 +284,7 @@ function doPost(e) {
         status: "success",
         leadId: p.leadId || p["LeadID"],
         transactionId: p.transactionId || p["Transaction ID"],
+        sheetName: paySheet.getName(),
         row: targetPayRow
       })).setMimeType(ContentService.MimeType.JSON);
     }
@@ -525,13 +549,22 @@ function updateLeadPaymentTotals(mainSheet, paySheet, leadId) {
   }
 }
 
-function getOrCreateMainSheet(ss) {
-  var names = [MAIN_SHEET_NAME, "Main Data", "Main Sheet", "Leads"];
+function getOrCreateMainSheet(ss, preferredName) {
+  var targetName = String(preferredName || MAIN_SHEET_NAME).trim();
+  var names = [targetName, MAIN_SHEET_NAME, "Main Data", "Main Sheet", "Leads", "Sheet1"];
+  var allSheets = ss.getSheets();
   for (var n = 0; n < names.length; n++) {
+    if (!names[n]) continue;
     var existing = ss.getSheetByName(names[n]);
     if (existing) return existing;
+    var lower = String(names[n]).toLowerCase();
+    for (var sIdx = 0; sIdx < allSheets.length; sIdx++) {
+      if (allSheets[sIdx].getName().trim().toLowerCase() === lower) {
+        return allSheets[sIdx];
+      }
+    }
   }
-  var s = ss.insertSheet(MAIN_SHEET_NAME);
+  var s = ss.insertSheet(targetName || MAIN_SHEET_NAME);
   s.appendRow([
     "LeadID", "Lead Date", "Follow Up Date", "Next Follow Up ", "Converted Date",
     "Quotation Date", "Documentation Date", "Registration Date", "Loan Date",
@@ -547,13 +580,22 @@ function getOrCreateMainSheet(ss) {
   return s;
 }
 
-function getOrCreatePaymentSheet(ss) {
-  var names = [PAYMENT_SHEET_NAME, "Payment Details", "Payment Data", "Payments", "Payment"];
+function getOrCreatePaymentSheet(ss, preferredName) {
+  var targetName = String(preferredName || PAYMENT_SHEET_NAME).trim();
+  var names = [targetName, PAYMENT_SHEET_NAME, "Payment Details", "Payment Data", "Payments", "Payment"];
+  var allSheets = ss.getSheets();
   for (var n = 0; n < names.length; n++) {
+    if (!names[n]) continue;
     var existing = ss.getSheetByName(names[n]);
     if (existing) return existing;
+    var lower = String(names[n]).toLowerCase();
+    for (var sIdx = 0; sIdx < allSheets.length; sIdx++) {
+      if (allSheets[sIdx].getName().trim().toLowerCase() === lower) {
+        return allSheets[sIdx];
+      }
+    }
   }
-  var s = ss.insertSheet(PAYMENT_SHEET_NAME);
+  var s = ss.insertSheet(targetName || PAYMENT_SHEET_NAME);
   s.appendRow([
     "LeadID", "Payment Date", "Payment Type", "Amount", "Transaction ID", "Receipt Image", "Remark"
   ]);
@@ -575,6 +617,7 @@ function formatDate(val) {
   }
   return String(val);
 }`;
+}
 
 export const GoogleSheetSyncModal: React.FC<GoogleSheetSyncModalProps> = ({
   isOpen,
@@ -591,25 +634,191 @@ export const GoogleSheetSyncModal: React.FC<GoogleSheetSyncModalProps> = ({
 }) => {
   const [activeTab, setActiveTab] = useState<'twoway' | 'code' | 'drive' | 'csv'>('twoway');
   const [webAppUrl, setWebAppUrl] = useState(syncConfig.webAppUrl || '');
+  const [mainSheetName, setMainSheetName] = useState(syncConfig.mainSheetName || 'Main Project Sheet');
+  const [paymentSheetName, setPaymentSheetName] = useState(syncConfig.paymentSheetName || 'Payment Sheet');
+  const [detectedSheets, setDetectedSheets] = useState<string[]>(
+    syncConfig.availableSheets && syncConfig.availableSheets.length > 0
+      ? syncConfig.availableSheets
+      : ['Main Project Sheet', 'Payment Sheet', 'Main Data', 'Payment Data', 'Payment Details', 'Leads', 'Payments', 'Sheet1', 'Users']
+  );
+  const [customSheetInput, setCustomSheetInput] = useState('');
+  const [isFetchingSheets, setIsFetchingSheets] = useState(false);
   const [copiedCode, setCopiedCode] = useState(false);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
 
+  React.useEffect(() => {
+    if (isOpen) {
+      setWebAppUrl(syncConfig.webAppUrl || '');
+      setMainSheetName(syncConfig.mainSheetName || 'Main Project Sheet');
+      setPaymentSheetName(syncConfig.paymentSheetName || 'Payment Sheet');
+      if (syncConfig.availableSheets && syncConfig.availableSheets.length > 0) {
+        setDetectedSheets((prev) =>
+          Array.from(
+            new Set([
+              ...syncConfig.availableSheets!,
+              syncConfig.mainSheetName || 'Main Project Sheet',
+              syncConfig.paymentSheetName || 'Payment Sheet',
+              ...prev,
+            ])
+          )
+        );
+      }
+    }
+  }, [isOpen, syncConfig.webAppUrl, syncConfig.mainSheetName, syncConfig.paymentSheetName, syncConfig.availableSheets]);
+
   if (!isOpen) return null;
 
+  const generatedAppsScriptCode = buildAppsScriptCode(
+    mainSheetName.trim() || 'Main Project Sheet',
+    paymentSheetName.trim() || 'Payment Sheet'
+  );
+
+  // Combined list of all sheet options for dropdown selection
+  const allSheetOptions = Array.from(
+    new Set([
+      mainSheetName.trim() || 'Main Project Sheet',
+      paymentSheetName.trim() || 'Payment Sheet',
+      ...(syncConfig.availableSheets || []),
+      ...detectedSheets,
+      'Main Project Sheet',
+      'Payment Sheet',
+      'Main Data',
+      'Main Sheet',
+      'Payment Data',
+      'Payment Details',
+      'Payments',
+      'Leads',
+      'Sheet1',
+      'Sheet2',
+    ].filter(Boolean))
+  );
+
   const handleCopyCode = () => {
-    navigator.clipboard.writeText(APPS_SCRIPT_CODE_DRIVE_SHEET);
+    navigator.clipboard.writeText(generatedAppsScriptCode);
     setCopiedCode(true);
     setTimeout(() => setCopiedCode(false), 2000);
   };
 
+  const handleFetchSheetsFromUrl = async (overrideUrl?: string) => {
+    const targetUrl = (overrideUrl ?? webAppUrl).trim();
+    if (!targetUrl) {
+      setStatusMessage('Please enter your Google Apps Script Web App URL first.');
+      return;
+    }
+    setIsFetchingSheets(true);
+    try {
+      const res = await fetch('/api/sheet-proxy', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          webAppUrl: targetUrl,
+          method: 'GET',
+          mainSheetName: mainSheetName.trim() || 'Main Project Sheet',
+          paymentSheetName: paymentSheetName.trim() || 'Payment Sheet',
+        }),
+      });
+      if (res.ok) {
+        const json = await res.json();
+        const incomingTabs: string[] = Array.isArray(json.availableSheets)
+          ? json.availableSheets
+          : Array.isArray(json.sheets)
+          ? json.sheets
+          : [];
+        const resolvedMain = json.mainSheetName || mainSheetName.trim() || 'Main Project Sheet';
+        const resolvedPay = json.paymentSheetName || paymentSheetName.trim() || 'Payment Sheet';
+        const mergedTabs = Array.from(
+          new Set([
+            ...incomingTabs,
+            resolvedMain,
+            resolvedPay,
+            ...detectedSheets,
+          ].filter(Boolean))
+        );
+        setDetectedSheets(mergedTabs);
+        onSaveSyncConfig({
+          ...syncConfig,
+          webAppUrl: targetUrl,
+          mainSheetName: mainSheetName.trim() || resolvedMain,
+          paymentSheetName: paymentSheetName.trim() || resolvedPay,
+          availableSheets: mergedTabs,
+          autoSync: true,
+        });
+        if (incomingTabs.length > 0) {
+          setStatusMessage(`Detected ${incomingTabs.length} sheet tab(s) from attached Google Spreadsheet: ${incomingTabs.join(', ')}`);
+        } else {
+          setStatusMessage(`Connected to Google Sheet! Active Main Sheet: "${mainSheetName}" | Active Payment Sheet: "${paymentSheetName}".`);
+        }
+      }
+    } catch {
+      setStatusMessage('Saved sheet configuration. Select your Main Sheet and Payment Sheet tabs below.');
+    } finally {
+      setIsFetchingSheets(false);
+    }
+  };
+
   const handleSaveUrl = () => {
+    const cleanMain = mainSheetName.trim() || 'Main Project Sheet';
+    const cleanPay = paymentSheetName.trim() || 'Payment Sheet';
+    const updatedTabs = Array.from(new Set([cleanMain, cleanPay, ...detectedSheets]));
+    setDetectedSheets(updatedTabs);
     onSaveSyncConfig({
       ...syncConfig,
       webAppUrl: webAppUrl.trim(),
+      mainSheetName: cleanMain,
+      paymentSheetName: cleanPay,
+      availableSheets: updatedTabs,
       autoSync: true,
       lastSyncedAt: new Date().toISOString(),
     });
-    setStatusMessage('Google Apps Script URL saved successfully.');
+    setStatusMessage(`Saved! Main Sheet: "${cleanMain}" | Payment Sheet: "${cleanPay}".`);
+    if (webAppUrl.trim()) {
+      handleFetchSheetsFromUrl(webAppUrl.trim());
+    }
+  };
+
+  const handleSelectMainSheet = (newMainName: string) => {
+    setMainSheetName(newMainName);
+    const cleanMain = newMainName.trim() || 'Main Project Sheet';
+    const cleanPay = paymentSheetName.trim() || 'Payment Sheet';
+    const updatedTabs = Array.from(new Set([cleanMain, cleanPay, ...detectedSheets]));
+    setDetectedSheets(updatedTabs);
+    onSaveSyncConfig({
+      ...syncConfig,
+      webAppUrl: webAppUrl.trim() || syncConfig.webAppUrl,
+      mainSheetName: cleanMain,
+      paymentSheetName: cleanPay,
+      availableSheets: updatedTabs,
+    });
+    setStatusMessage(`Main Sheet set to "${cleanMain}". Click "Sync Now" to pull/push data with this sheet.`);
+  };
+
+  const handleSelectPaymentSheet = (newPayName: string) => {
+    setPaymentSheetName(newPayName);
+    const cleanMain = mainSheetName.trim() || 'Main Project Sheet';
+    const cleanPay = newPayName.trim() || 'Payment Sheet';
+    const updatedTabs = Array.from(new Set([cleanMain, cleanPay, ...detectedSheets]));
+    setDetectedSheets(updatedTabs);
+    onSaveSyncConfig({
+      ...syncConfig,
+      webAppUrl: webAppUrl.trim() || syncConfig.webAppUrl,
+      mainSheetName: cleanMain,
+      paymentSheetName: cleanPay,
+      availableSheets: updatedTabs,
+    });
+    setStatusMessage(`Payment Sheet set to "${cleanPay}". Click "Sync Now" to pull/push payments with this sheet.`);
+  };
+
+  const handleAddCustomSheetTab = () => {
+    const trimmed = customSheetInput.trim();
+    if (!trimmed) return;
+    const updatedTabs = Array.from(new Set([trimmed, ...detectedSheets]));
+    setDetectedSheets(updatedTabs);
+    onSaveSyncConfig({
+      ...syncConfig,
+      availableSheets: updatedTabs,
+    });
+    setCustomSheetInput('');
+    setStatusMessage(`Added sheet tab "${trimmed}" to selector list. You can now assign it as Main Sheet or Payment Sheet.`);
   };
 
   const handleManualSyncNow = async () => {
@@ -683,7 +892,7 @@ export const GoogleSheetSyncModal: React.FC<GoogleSheetSyncModalProps> = ({
                 Direct Google Sheets & Google Drive Integration
               </h3>
               <p className="text-xs text-slate-500">
-                Main Project Sheet (44 Cols) + Payment Sheet (7 Cols) + Drive Attachments
+                Main Sheet: <strong>{mainSheetName || 'Main Project Sheet'}</strong> (44 Cols) + Payment Sheet: <strong>{paymentSheetName || 'Payment Sheet'}</strong> (7 Cols)
               </p>
             </div>
           </div>
@@ -750,7 +959,7 @@ export const GoogleSheetSyncModal: React.FC<GoogleSheetSyncModalProps> = ({
                     <span>Synchronize with Your Live Google Sheet</span>
                   </h4>
                   <p className="text-[11px] text-indigo-800 mt-0.5">
-                    Syncs <strong>{leads.length}</strong> project rows + <strong>{payments.length}</strong> payment transactions.
+                    Syncs <strong>{leads.length}</strong> project rows (<strong>{mainSheetName}</strong>) + <strong>{payments.length}</strong> payment transactions (<strong>{paymentSheetName}</strong>).
                   </p>
                 </div>
 
@@ -783,15 +992,16 @@ export const GoogleSheetSyncModal: React.FC<GoogleSheetSyncModalProps> = ({
                   className="flex-1 px-3 py-2 text-xs font-mono bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
                 />
                 <button
+                  type="button"
                   onClick={handleSaveUrl}
-                  className="px-3.5 py-2 text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg cursor-pointer shrink-0"
+                  className="px-3.5 py-2 text-xs font-semibold text-white bg-slate-900 hover:bg-slate-800 rounded-lg cursor-pointer shrink-0"
                 >
-                  Save URL
+                  Save & Attach Sheet
                 </button>
               </div>
               {statusMessage && (
-                <div className="text-[11px] text-emerald-600 font-medium flex items-center gap-1">
-                  <CheckCircle2 className="w-3.5 h-3.5" />
+                <div className="text-[11px] text-emerald-700 bg-emerald-50 border border-emerald-200 px-2.5 py-1.5 rounded-lg font-medium flex items-center gap-1.5">
+                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
                   <span>{statusMessage}</span>
                 </div>
               )}
@@ -814,7 +1024,7 @@ export const GoogleSheetSyncModal: React.FC<GoogleSheetSyncModalProps> = ({
                 </div>
                 <p className="text-[11px] text-slate-600">
                   {syncConfig.autoSync && Boolean((webAppUrl || syncConfig.webAppUrl).trim())
-                    ? `Active — Automatically syncs with Google Sheet every ${syncConfig.syncIntervalMinutes || 1} min(s) and on every record change.`
+                    ? `Active — Automatically syncs with "${mainSheetName}" & "${paymentSheetName}" every ${syncConfig.syncIntervalMinutes || 1} min(s) and on every record change.`
                     : 'Enter a valid Web App URL and keep Auto-Sync enabled for continuous live synchronization.'}
                 </p>
               </div>
@@ -827,6 +1037,8 @@ export const GoogleSheetSyncModal: React.FC<GoogleSheetSyncModalProps> = ({
                     onSaveSyncConfig({
                       ...syncConfig,
                       webAppUrl: webAppUrl.trim() || syncConfig.webAppUrl,
+                      mainSheetName: mainSheetName.trim() || 'Main Project Sheet',
+                      paymentSheetName: paymentSheetName.trim() || 'Payment Sheet',
                       syncIntervalMinutes: mins,
                       autoSync: true,
                     });
@@ -847,6 +1059,8 @@ export const GoogleSheetSyncModal: React.FC<GoogleSheetSyncModalProps> = ({
                       onSaveSyncConfig({
                         ...syncConfig,
                         webAppUrl: webAppUrl.trim() || syncConfig.webAppUrl,
+                        mainSheetName: mainSheetName.trim() || 'Main Project Sheet',
+                        paymentSheetName: paymentSheetName.trim() || 'Payment Sheet',
                         autoSync: e.target.checked,
                       });
                     }}
@@ -859,20 +1073,200 @@ export const GoogleSheetSyncModal: React.FC<GoogleSheetSyncModalProps> = ({
               </div>
             </div>
 
-            {/* Sheet Tabs Info */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
-              <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 space-y-1">
-                <strong className="text-slate-900 block font-semibold">1. Main Project Sheet (44 Columns)</strong>
-                <p className="text-[11px] text-slate-500">
-                  LeadID, Dates (Follow Up, Converted, Quotation, Documentation, Registration, Loan, Survey, Dispatch, Installation, Net Meter, Connection, Complete), Customer Details, Technical Specs (Panels, Inverters, Battery, Wiring, Structure), Deal Amount, Due Amount.
-                </p>
+            {/* Interactive Sheet Tabs Selection: Select which Sheet is Main Sheet & which Sheet is Payment Sheet */}
+            <div className="p-4 bg-slate-50 rounded-2xl border-2 border-slate-200 space-y-3.5">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-200 pb-2.5">
+                <div>
+                  <h4 className="font-bold text-slate-900 text-xs flex items-center gap-1.5">
+                    <ArrowDownUp className="w-4 h-4 text-indigo-600" />
+                    <span>Select & Change Attached Sheets (Main Sheet & Payment Sheet Mapping)</span>
+                  </h4>
+                  <p className="text-[11px] text-slate-500 mt-0.5">
+                    Choose which sheet tab in your attached Google Spreadsheet is used for <strong>Main Project Data</strong> and which is used for <strong>Payment Data</strong>.
+                  </p>
+                </div>
+
+                <button
+                  type="button"
+                  disabled={isFetchingSheets}
+                  onClick={() => handleFetchSheetsFromUrl()}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white hover:bg-indigo-50 text-indigo-700 border border-indigo-200 rounded-lg text-[11px] font-semibold cursor-pointer shrink-0 shadow-2xs"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${isFetchingSheets ? 'animate-spin' : ''}`} />
+                  <span>{isFetchingSheets ? 'Loading Sheet Tabs...' : 'Detect Tabs from Sheet'}</span>
+                </button>
               </div>
 
-              <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 space-y-1">
-                <strong className="text-slate-900 block font-semibold">2. Payment Sheet (7 Columns)</strong>
-                <p className="text-[11px] text-slate-500">
-                  LeadID, Payment Date, Payment Type (Cash, UPI, RTGS/NEFT, Loan), Amount (₹), Transaction ID, Receipt Image (Google Drive link), Remark.
-                </p>
+              {/* Add custom tab name or click detected tabs */}
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 bg-white p-2.5 rounded-xl border border-slate-200">
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mr-1">
+                    Available Sheet Tabs:
+                  </span>
+                  {allSheetOptions.slice(0, 8).map((tabName) => {
+                    const isMain = tabName === mainSheetName;
+                    const isPay = tabName === paymentSheetName;
+                    return (
+                      <span
+                        key={tabName}
+                        className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-medium border ${
+                          isMain
+                            ? 'bg-indigo-100 text-indigo-900 border-indigo-300 font-bold'
+                            : isPay
+                            ? 'bg-emerald-100 text-emerald-900 border-emerald-300 font-bold'
+                            : 'bg-slate-100 text-slate-700 border-slate-200'
+                        }`}
+                      >
+                        <span>{tabName}</span>
+                        {isMain && <span className="text-[9px] bg-indigo-600 text-white px-1 rounded">MAIN</span>}
+                        {isPay && <span className="text-[9px] bg-emerald-600 text-white px-1 rounded">PAYMENT</span>}
+                      </span>
+                    );
+                  })}
+                </div>
+
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <input
+                    type="text"
+                    placeholder="Add custom tab name..."
+                    value={customSheetInput}
+                    onChange={(e) => setCustomSheetInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        handleAddCustomSheetTab();
+                      }
+                    }}
+                    className="px-2.5 py-1 text-[11px] bg-slate-50 border border-slate-300 rounded-lg w-36 focus:outline-none focus:border-indigo-500"
+                  />
+                  <button
+                    type="button"
+                    onClick={handleAddCustomSheetTab}
+                    className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-white text-[11px] font-medium rounded-lg cursor-pointer"
+                  >
+                    + Add Tab
+                  </button>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {/* 1. Main Project Sheet Selector Card */}
+                <div className="p-3.5 bg-white rounded-xl border-2 border-indigo-200 space-y-2.5 shadow-2xs">
+                  <div className="flex items-center justify-between gap-2">
+                    <strong className="text-indigo-950 font-bold text-xs flex items-center gap-1.5">
+                      <span className="w-5 h-5 rounded-md bg-indigo-600 text-white inline-flex items-center justify-center text-[11px] font-bold">
+                        1
+                      </span>
+                      <span>Main Data Sheet (44 Columns)</span>
+                    </strong>
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-mono font-semibold bg-indigo-50 text-indigo-700 border border-indigo-200">
+                      Active: {mainSheetName}
+                    </span>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <label className="block text-[11px] font-semibold text-slate-700">
+                      Select Sheet Tab for Main Project Data:
+                    </label>
+                    <select
+                      value={allSheetOptions.includes(mainSheetName) ? mainSheetName : '__custom__'}
+                      onChange={(e) => {
+                        if (e.target.value !== '__custom__') {
+                          handleSelectMainSheet(e.target.value);
+                        }
+                      }}
+                      className="w-full px-3 py-2 bg-indigo-50/40 border border-indigo-300 rounded-lg text-xs font-bold text-indigo-950 focus:outline-none focus:ring-2 focus:ring-indigo-500 cursor-pointer"
+                    >
+                      {allSheetOptions.map((sheetOpt) => (
+                        <option key={`main-${sheetOpt}`} value={sheetOpt}>
+                          📄 {sheetOpt} {sheetOpt === paymentSheetName ? '(Currently Payment Sheet)' : ''}
+                        </option>
+                      ))}
+                      <option value="__custom__">✏️ Type Custom Sheet Name Below...</option>
+                    </select>
+
+                    <div className="flex items-center gap-1.5 pt-0.5">
+                      <span className="text-[10px] text-slate-500 shrink-0">Or Edit Tab Name:</span>
+                      <input
+                        type="text"
+                        value={mainSheetName}
+                        onChange={(e) => handleSelectMainSheet(e.target.value)}
+                        placeholder="e.g. Main Project Sheet"
+                        className="flex-1 px-2.5 py-1 text-[11px] font-mono bg-white border border-slate-300 rounded-md text-slate-800 focus:outline-none focus:border-indigo-500"
+                      />
+                    </div>
+                  </div>
+
+                  <p className="text-[10px] text-slate-500 leading-relaxed">
+                    Stores LeadID, Dates, Customer Details, Sales Person, Technical Specs, Deal Amount, Summed Payment Received & Due Amount.
+                  </p>
+                </div>
+
+                {/* 2. Payment Sheet Selector Card */}
+                <div className="p-3.5 bg-white rounded-xl border-2 border-emerald-200 space-y-2.5 shadow-2xs">
+                  <div className="flex items-center justify-between gap-2">
+                    <strong className="text-emerald-950 font-bold text-xs flex items-center gap-1.5">
+                      <span className="w-5 h-5 rounded-md bg-emerald-600 text-white inline-flex items-center justify-center text-[11px] font-bold">
+                        2
+                      </span>
+                      <span>Payment Data Sheet (7 Columns)</span>
+                    </strong>
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-mono font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                      Active: {paymentSheetName}
+                    </span>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <label className="block text-[11px] font-semibold text-slate-700">
+                      Select Sheet Tab for Payment Details:
+                    </label>
+                    <select
+                      value={allSheetOptions.includes(paymentSheetName) ? paymentSheetName : '__custom__'}
+                      onChange={(e) => {
+                        if (e.target.value !== '__custom__') {
+                          handleSelectPaymentSheet(e.target.value);
+                        }
+                      }}
+                      className="w-full px-3 py-2 bg-emerald-50/40 border border-emerald-300 rounded-lg text-xs font-bold text-emerald-950 focus:outline-none focus:ring-2 focus:ring-emerald-500 cursor-pointer"
+                    >
+                      {allSheetOptions.map((sheetOpt) => (
+                        <option key={`pay-${sheetOpt}`} value={sheetOpt}>
+                          💳 {sheetOpt} {sheetOpt === mainSheetName ? '(Currently Main Sheet)' : ''}
+                        </option>
+                      ))}
+                      <option value="__custom__">✏️ Type Custom Sheet Name Below...</option>
+                    </select>
+
+                    <div className="flex items-center gap-1.5 pt-0.5">
+                      <span className="text-[10px] text-slate-500 shrink-0">Or Edit Tab Name:</span>
+                      <input
+                        type="text"
+                        value={paymentSheetName}
+                        onChange={(e) => handleSelectPaymentSheet(e.target.value)}
+                        placeholder="e.g. Payment Sheet"
+                        className="flex-1 px-2.5 py-1 text-[11px] font-mono bg-white border border-slate-300 rounded-md text-slate-800 focus:outline-none focus:border-emerald-500"
+                      />
+                    </div>
+                  </div>
+
+                  <p className="text-[10px] text-slate-500 leading-relaxed">
+                    Stores LeadID, Payment Date, Payment Type (Cash, UPI, RTGS/NEFT, Loan), Amount (₹), Transaction ID, Receipt Image & Remark.
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center justify-between pt-1">
+                <span className="text-[11px] text-slate-500">
+                  Mapped: <strong className="text-indigo-700">{mainSheetName}</strong> (Main) &amp; <strong className="text-emerald-700">{paymentSheetName}</strong> (Payment)
+                </span>
+                <button
+                  type="button"
+                  onClick={handleManualSyncNow}
+                  disabled={isSyncing}
+                  className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold rounded-lg text-xs cursor-pointer shadow-2xs disabled:opacity-50"
+                >
+                  Save Sheet Selection &amp; Sync Now
+                </button>
               </div>
             </div>
           </div>
@@ -887,7 +1281,7 @@ export const GoogleSheetSyncModal: React.FC<GoogleSheetSyncModalProps> = ({
                   Google Apps Script (Code.gs)
                 </span>
                 <p className="text-[11px] text-slate-500">
-                  Handles 44 Main Project Sheet columns + 7 Payment Sheet columns + Google Drive uploads.
+                  Configured for Main Sheet: <strong>"{mainSheetName}"</strong> + Payment Sheet: <strong>"{paymentSheetName}"</strong> + Google Drive uploads.
                 </p>
               </div>
               <button
@@ -908,7 +1302,7 @@ export const GoogleSheetSyncModal: React.FC<GoogleSheetSyncModalProps> = ({
               </button>
             </div>
             <pre className="p-4 bg-slate-900 text-slate-100 rounded-xl text-[11px] font-mono overflow-x-auto max-h-96 leading-relaxed">
-              {APPS_SCRIPT_CODE_DRIVE_SHEET}
+              {generatedAppsScriptCode}
             </pre>
           </div>
         )}
