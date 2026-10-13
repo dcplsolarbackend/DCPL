@@ -650,21 +650,132 @@ export default function App() {
     showToast(`Logged in as ${user.name} (${user.role})`);
   };
 
-  const handleUpdateUser = (updatedUser: User) => {
-    const updatedList = users.map((u) => (u.id === updatedUser.id ? updatedUser : u));
+  const handleUpdateUser = async (updatedUser: User, previousEmail?: string) => {
+    const stamped: User = {
+      ...updatedUser,
+      updatedAt: Date.now(),
+    };
+    const cleanPrev = (previousEmail || stamped.email || '').trim().toLowerCase();
+
+    // 1. Immediate client update
+    const updatedList = users.map((u) => {
+      const uEmail = (u.email || '').trim().toLowerCase();
+      if (u.id === stamped.id || uEmail === cleanPrev || uEmail === stamped.email.toLowerCase()) {
+        return stamped;
+      }
+      return u;
+    });
     setUsers(updatedList);
-    saveUsers(updatedList);
-    if (currentUser && currentUser.id === updatedUser.id) {
-      setCurrentUserState(updatedUser);
-      setStoredUser(updatedUser);
+    saveUsers(updatedList, true);
+
+    if (currentUser && (currentUser.id === stamped.id || currentUser.email.toLowerCase() === cleanPrev)) {
+      setCurrentUserState(stamped);
+      setStoredUser(stamped);
     }
+
+    // 2. Persist to server store so other devices and browsers can login with updated credentials immediately
+    try {
+      await fetch('/api/users/upsert', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          user: stamped,
+          previousEmail: cleanPrev,
+        }),
+      });
+    } catch (e) {
+      console.warn('Could not sync user to server:', e);
+    }
+
+    // 3. If Google Sheet Apps Script URL is attached, sync user row to Users tab
+    if (syncConfig.webAppUrl) {
+      fetch('/api/sheet-proxy', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          webAppUrl: syncConfig.webAppUrl,
+          method: 'POST',
+          mainSheetName: syncConfig.mainSheetName,
+          paymentSheetName: syncConfig.paymentSheetName,
+          payload: {
+            action: 'saveUser',
+            user: stamped,
+            previousEmail: cleanPrev,
+            users: updatedList,
+          },
+        }),
+      }).catch(() => {});
+    }
+
+    showToast(`Saved credentials for ${stamped.name} (${stamped.email}).`);
   };
 
-  const handleAddUser = (newUser: User) => {
-    const updatedList = [newUser, ...users];
+  const handleAddUser = async (newUser: User) => {
+    const stamped: User = {
+      ...newUser,
+      updatedAt: Date.now(),
+    };
+    const updatedList = [stamped, ...users.filter((u) => u.email.toLowerCase() !== stamped.email.toLowerCase())];
     setUsers(updatedList);
-    saveUsers(updatedList);
-    showToast(`Added user ${newUser.name}.`);
+    saveUsers(updatedList, true);
+
+    try {
+      await fetch('/api/users/upsert', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          user: stamped,
+        }),
+      });
+    } catch (e) {
+      console.warn('Could not sync user to server:', e);
+    }
+
+    if (syncConfig.webAppUrl) {
+      fetch('/api/sheet-proxy', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          webAppUrl: syncConfig.webAppUrl,
+          method: 'POST',
+          mainSheetName: syncConfig.mainSheetName,
+          paymentSheetName: syncConfig.paymentSheetName,
+          payload: {
+            action: 'saveUser',
+            user: stamped,
+            users: updatedList,
+          },
+        }),
+      }).catch(() => {});
+    }
+
+    showToast(`Added user ${newUser.name} (${newUser.email}).`);
+  };
+
+  const handleDeleteUser = async (targetUser: User) => {
+    if (currentUser?.email.toLowerCase() === targetUser.email.toLowerCase()) {
+      showToast('Cannot delete your own logged-in Admin account.');
+      return;
+    }
+    const updatedList = users.filter(
+      (u) => u.id !== targetUser.id && u.email.toLowerCase() !== targetUser.email.toLowerCase()
+    );
+    setUsers(updatedList);
+    saveUsers(updatedList, true);
+
+    try {
+      await fetch('/api/users/delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId: targetUser.id,
+          email: targetUser.email,
+        }),
+      });
+    } catch (e) {
+      console.warn('Could not sync delete to server:', e);
+    }
+    showToast(`Removed user ${targetUser.name}.`);
   };
 
   const handleLogout = () => {
@@ -957,6 +1068,7 @@ export default function App() {
                 onSwitchUser={handleSwitchUser}
                 onUpdateUser={handleUpdateUser}
                 onAddUser={handleAddUser}
+                onDeleteUser={handleDeleteUser}
                 activityLogs={activityLogs}
               />
             ) : (

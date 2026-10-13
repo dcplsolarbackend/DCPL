@@ -43,15 +43,17 @@ import {
   Layers,
   CheckSquare,
   AlertCircle,
-  FolderGit2
+  FolderGit2,
+  Trash2
 } from 'lucide-react';
 
 interface UsersManagementProps {
   users: User[];
   currentUser: User;
   onSwitchUser: (user: User) => void;
-  onUpdateUser: (updatedUser: User) => void;
+  onUpdateUser: (updatedUser: User, previousEmail?: string) => void;
   onAddUser: (newUser: User) => void;
+  onDeleteUser?: (user: User) => void;
   activityLogs: ActivityLog[];
 }
 
@@ -69,6 +71,7 @@ export const UsersManagement: React.FC<UsersManagementProps> = ({
   onSwitchUser,
   onUpdateUser,
   onAddUser,
+  onDeleteUser,
   activityLogs,
 }) => {
   const [activeTab, setActiveTab] = useState<'users' | 'pipeline' | 'mandatory' | 'columns' | 'activity'>('users');
@@ -217,19 +220,21 @@ export const UsersManagement: React.FC<UsersManagementProps> = ({
       phone: editPhone.trim(),
       customAllowedStages: hasCustomStagesOverride ? editCustomStages : undefined,
       lastActive: 'Credentials updated',
+      updatedAt: Date.now(),
     };
 
-    onUpdateUser(updated);
+    onUpdateUser(updated, selectedUserForEdit.email);
+    showBannerMessage(`Saved updated credentials for ${updated.name} (${cleanEmail}).`);
     setIsEditUserModalOpen(false);
   };
 
   const handleToggleStatus = (targetUser: User) => {
     if (!isAdmin) {
-      alert('Only Administrators can change user active/inactive status.');
+      showBannerMessage('Only Administrators can change user active/inactive status.');
       return;
     }
     if (targetUser.email === currentUser.email) {
-      alert('You cannot deactivate your own current admin account.');
+      showBannerMessage('You cannot deactivate your own current admin account.');
       return;
     }
 
@@ -238,18 +243,20 @@ export const UsersManagement: React.FC<UsersManagementProps> = ({
       ...targetUser,
       status: newStatus,
       lastActive: newStatus === 'Active' ? 'Re-activated' : 'Deactivated by Admin',
-    });
+      updatedAt: Date.now(),
+    }, targetUser.email);
   };
 
   const handleRoleChange = (targetUser: User, newRole: UserRole) => {
     if (!isAdmin) {
-      alert('Only Administrators can modify user roles.');
+      showBannerMessage('Only Administrators can modify user roles.');
       return;
     }
     onUpdateUser({
       ...targetUser,
       role: newRole,
-    });
+      updatedAt: Date.now(),
+    }, targetUser.email);
   };
 
   const handleCreateUser = (e: React.FormEvent) => {
@@ -259,8 +266,27 @@ export const UsersManagement: React.FC<UsersManagementProps> = ({
 
     if (!cleanEmail || !newUserName.trim()) return;
 
-    if (users.some((u) => u.email.toLowerCase() === cleanEmail)) {
-      alert('A user with this email address already exists!');
+    const existingUser = users.find((u) => u.email.toLowerCase() === cleanEmail);
+    if (existingUser) {
+      // If user with this email already exists, update their password, name, and role instead of blocking
+      const updatedExisting: User = {
+        ...existingUser,
+        name: newUserName.trim() || existingUser.name,
+        password: cleanPassword,
+        role: newUserRole,
+        status: 'Active',
+        phone: newUserPhone.trim() || existingUser.phone,
+        updatedAt: Date.now(),
+        lastActive: 'Credentials updated',
+      };
+      onUpdateUser(updatedExisting, existingUser.email);
+      showBannerMessage(`Updated existing user account for ${cleanEmail} with new password.`);
+      setIsAddUserModalOpen(false);
+      setNewUserName('');
+      setNewUserEmail('');
+      setNewUserPassword('');
+      setNewUserPhone('');
+      setShowNewPassword(false);
       return;
     }
 
@@ -274,9 +300,11 @@ export const UsersManagement: React.FC<UsersManagementProps> = ({
       phone: newUserPhone.trim() || '',
       lastActive: 'Just registered',
       createdAt: new Date().toISOString().split('T')[0],
+      updatedAt: Date.now(),
     };
 
     onAddUser(created);
+    showBannerMessage(`Created staff user ${created.name} (${cleanEmail}) with password "${cleanPassword}".`);
     setIsAddUserModalOpen(false);
     setNewUserName('');
     setNewUserEmail('');
@@ -657,19 +685,35 @@ export const UsersManagement: React.FC<UsersManagementProps> = ({
                         </button>
                       </td>
 
-                      {/* Deactivate / Activate Toggle */}
+                      {/* Deactivate / Activate Toggle & Delete */}
                       <td className="py-3 px-4 text-center whitespace-nowrap">
-                        <button
-                          disabled={isCurrent}
-                          onClick={() => handleToggleStatus(u)}
-                          className={`px-2.5 py-1 text-xs font-medium rounded-lg transition-colors cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed ${
-                            u.status === 'Active'
-                              ? 'text-rose-700 hover:bg-rose-50 border border-rose-200'
-                              : 'text-emerald-700 hover:bg-emerald-50 border border-emerald-200'
-                          }`}
-                        >
-                          {u.status === 'Active' ? 'Deactivate' : 'Activate'}
-                        </button>
+                        <div className="flex items-center justify-center gap-1.5">
+                          <button
+                            disabled={isCurrent}
+                            onClick={() => handleToggleStatus(u)}
+                            className={`px-2.5 py-1 text-xs font-medium rounded-lg transition-colors cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed ${
+                              u.status === 'Active'
+                                ? 'text-rose-700 hover:bg-rose-50 border border-rose-200'
+                                : 'text-emerald-700 hover:bg-emerald-50 border border-emerald-200'
+                            }`}
+                          >
+                            {u.status === 'Active' ? 'Deactivate' : 'Activate'}
+                          </button>
+                          {onDeleteUser && (
+                            <button
+                              disabled={isCurrent}
+                              onClick={() => {
+                                if (window.confirm(`Permanently remove staff account for ${u.name} (${u.email})?`)) {
+                                  onDeleteUser(u);
+                                }
+                              }}
+                              title="Delete User Account"
+                              className="p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer disabled:opacity-20"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+                        </div>
                       </td>
                     </tr>
                   );
