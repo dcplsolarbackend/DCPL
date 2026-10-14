@@ -579,6 +579,14 @@ app.post('/api/sheet-proxy', async (req, res) => {
       return;
     }
 
+    // If saving a payment, also persist the payment to server store so all CRM devices have it
+    if (payload?.action === 'savePayment' && (payload?.payment || payload?.leadId)) {
+      const p = payload.payment || payload;
+      const currentPayments = Array.isArray(store.payments) ? store.payments : [];
+      const updatedPayments = [p, ...currentPayments.filter((cp: any) => cp.id !== p.id && cp.transactionId !== p.transactionId)];
+      writeServerStore({ payments: updatedPayments });
+    }
+
     // POST to Google Apps Script
     const enrichedPayload = {
       ...(payload || {}),

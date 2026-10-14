@@ -165,15 +165,17 @@ export function loadSyncConfig(): SheetSyncConfig {
       const webAppUrl = parsed.webAppUrl || fallbackUrl;
       const mainSheetName = parsed.mainSheetName || 'Main Project Sheet';
       const paymentSheetName = parsed.paymentSheetName || 'Payment Sheet';
-      const defaultSheets = Array.from(new Set([mainSheetName, paymentSheetName, 'Main Project Sheet', 'Payment Sheet', 'Users']));
+      const realSheets: string[] = Array.isArray(parsed.availableSheets)
+        ? parsed.availableSheets.filter(
+            (s: string) => typeof s === 'string' && s.trim().length > 0 && s.toLowerCase() !== 'users'
+          )
+        : [];
       return {
         webAppUrl,
         spreadsheetId: parsed.spreadsheetId || '',
         mainSheetName,
         paymentSheetName,
-        availableSheets: Array.isArray(parsed.availableSheets) && parsed.availableSheets.length > 0
-          ? Array.from(new Set([...parsed.availableSheets, mainSheetName, paymentSheetName]))
-          : defaultSheets,
+        availableSheets: realSheets,
         driveFolderId: parsed.driveFolderId || '',
         autoSync: parsed.autoSync !== undefined ? Boolean(parsed.autoSync) : true,
         lastSyncedAt: parsed.lastSyncedAt || null,
@@ -189,7 +191,7 @@ export function loadSyncConfig(): SheetSyncConfig {
     spreadsheetId: '',
     mainSheetName: 'Main Project Sheet',
     paymentSheetName: 'Payment Sheet',
-    availableSheets: ['Main Project Sheet', 'Payment Sheet', 'Users'],
+    availableSheets: [],
     driveFolderId: '',
     autoSync: true,
     lastSyncedAt: null,

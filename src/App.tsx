@@ -282,12 +282,15 @@ export default function App() {
       return updated;
     });
 
+    const normId = normalizeLeadId(newPay.leadId);
+    let matchedLead: Lead | undefined;
+
     // Recalculate lead payment totals by summing all Payment Sheet entries for this LeadID
     setLeads((prev) => {
-      const normId = normalizeLeadId(newPay.leadId);
       const target = prev.find((l) => normalizeLeadId(l.leadId) === normId);
       if (!target) return prev;
 
+      matchedLead = target;
       const allPaysForLead = (nextPaymentsList.length > 0 ? nextPaymentsList : [newPay, ...payments]).filter(
         (p) => normalizeLeadId(p.leadId) === normId
       );
@@ -305,41 +308,41 @@ export default function App() {
 
       const updatedList = prev.map((l) => (normalizeLeadId(l.leadId) === normId ? updatedLead : l));
       saveLeads(updatedList);
-
-      if (syncConfig.webAppUrl) {
-        const activeMainSheet = syncConfig.mainSheetName || 'Main Project Sheet';
-        const activePaySheet = syncConfig.paymentSheetName || 'Payment Sheet';
-        const payPayload = buildSheetPaymentPayload(
-          newPay,
-          updatedLead,
-          currentUser.email,
-          activeMainSheet,
-          activePaySheet
-        );
-        fetch('/api/sheet-proxy', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            webAppUrl: syncConfig.webAppUrl,
-            method: 'POST',
-            mainSheetName: activeMainSheet,
-            paymentSheetName: activePaySheet,
-            payload: payPayload,
-          }),
-        }).catch(() => {
-          fetch(syncConfig.webAppUrl, {
-            method: 'POST',
-            mode: 'no-cors',
-            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-            body: JSON.stringify(payPayload),
-          }).catch((e) => console.log('Payment sync queued:', e));
-        });
-      }
-
       return updatedList;
     });
 
-    const leadObj = leads.find((l) => normalizeLeadId(l.leadId) === normalizeLeadId(newPay.leadId));
+    // Always push payment entry to Google Apps Script / Payment Sheet
+    if (syncConfig.webAppUrl) {
+      const activeMainSheet = syncConfig.mainSheetName || 'Main Project Sheet';
+      const activePaySheet = syncConfig.paymentSheetName || 'Payment Sheet';
+      const payPayload = buildSheetPaymentPayload(
+        newPay,
+        matchedLead || leads.find((l) => normalizeLeadId(l.leadId) === normId),
+        currentUser.email,
+        activeMainSheet,
+        activePaySheet
+      );
+      fetch('/api/sheet-proxy', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          webAppUrl: syncConfig.webAppUrl,
+          method: 'POST',
+          mainSheetName: activeMainSheet,
+          paymentSheetName: activePaySheet,
+          payload: payPayload,
+        }),
+      }).catch(() => {
+        fetch(syncConfig.webAppUrl, {
+          method: 'POST',
+          mode: 'no-cors',
+          headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+          body: JSON.stringify(payPayload),
+        }).catch((e) => console.log('Payment sync queued:', e));
+      });
+    }
+
+    const leadObj = matchedLead || leads.find((l) => normalizeLeadId(l.leadId) === normId);
 
     const log = logActivity({
       userEmail: currentUser.email,
@@ -429,18 +432,15 @@ export default function App() {
 
         const nowIso = new Date().toISOString();
         setSyncConfig((prev) => {
-          const incomingTabs = Array.isArray(json.availableSheets) ? json.availableSheets : [];
-          const mergedTabs = Array.from(
-            new Set([
-              ...incomingTabs,
-              ...(prev.availableSheets || []),
-              prev.mainSheetName || 'Main Project Sheet',
-              prev.paymentSheetName || 'Payment Sheet',
-            ].filter(Boolean))
-          );
+          const incomingTabs: string[] = Array.isArray(json.availableSheets)
+            ? json.availableSheets.filter((s: string) => s && s.toLowerCase() !== 'users')
+            : [];
+          const updatedTabs = incomingTabs.length > 0 ? incomingTabs : (prev.availableSheets || []);
           const updatedCfg = {
             ...prev,
-            availableSheets: mergedTabs,
+            mainSheetName: json.mainSheetName || prev.mainSheetName,
+            paymentSheetName: json.paymentSheetName || prev.paymentSheetName,
+            availableSheets: updatedTabs,
             lastSyncedAt: nowIso,
           };
           saveSyncConfig(updatedCfg);

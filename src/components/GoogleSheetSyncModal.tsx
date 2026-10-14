@@ -42,12 +42,22 @@ function buildAppsScriptCode(mainSheetDefault = 'Main Project Sheet', paymentShe
 // DCPL Solar CRM - Google Apps Script (Code.gs)
 // Handles "${mainSheetDefault}" (44 Columns) + "${paymentSheetDefault}" (7 Columns)
 // + "Users" Sheet (Multi-System Login) + Direct Google Drive PDF Uploads
+// Compatible with AppSheet-style next row entry and formula cell preservation
 // =========================================================================
 
 var MAIN_SHEET_NAME = ${JSON.stringify(mainSheetDefault)};
 var PAYMENT_SHEET_NAME = ${JSON.stringify(paymentSheetDefault)};
 var USERS_SHEET_NAME = "Users";
 var DRIVE_FOLDER_NAME = "DCPL Solar CRM Documents";
+
+// Safe numeric parser that cleans currency symbols (₹, Rs, $), commas and spaces
+function parseSheetNumber(val) {
+  if (typeof val === "number") return isNaN(val) ? 0 : val;
+  if (!val) return 0;
+  var str = String(val).replace(/[^0-9.-]/g, "");
+  var num = parseFloat(str);
+  return isNaN(num) ? 0 : num;
+}
 
 // 1. GET: Fetch Main Project Sheet, Payment Sheet, Users Sheet & Available Tabs
 function doGet(e) {
@@ -59,6 +69,7 @@ function doGet(e) {
     var mainSheet = getOrCreateMainSheet(ss, requestedMain);
     var paySheet = getOrCreatePaymentSheet(ss, requestedPay);
     var usersSheet = getOrCreateUsersSheet(ss);
+    // STRICT: Return exact real sheet tab names that exist in this Google Spreadsheet
     var availableSheets = ss.getSheets().map(function(s) { return s.getName(); });
     
     // Step A: Read Payment Sheet first and sum payments by LeadID
@@ -70,15 +81,19 @@ function doGet(e) {
     for (var j = 0; j < payData.length; j++) {
       var pr = payData[j];
       var payLeadId = String(pr[0] || "").trim();
-      var payAmt = Number(pr[3]) || 0;
-      if (payLeadId) {
+      var payAmt = parseSheetNumber(pr[3]);
+      var payDateVal = formatDate(pr[1]);
+      var payTxnVal = String(pr[4] || "").trim();
+
+      // Only include rows that have actual payment data
+      if (payLeadId && (payAmt > 0 || payTxnVal || payDateVal)) {
         payments.push({
           id: "PAY-" + (j + 1),
           leadId: payLeadId,
-          paymentDate: formatDate(pr[1]),
-          paymentType: String(pr[2] || ""),
+          paymentDate: payDateVal,
+          paymentType: String(pr[2] || "UPI"),
           amount: payAmt,
-          transactionId: String(pr[4] || ""),
+          transactionId: payTxnVal || ("TXN-" + (j + 1)),
           receiptImage: String(pr[5] || ""),
           remark: String(pr[6] || "")
         });
@@ -89,7 +104,7 @@ function doGet(e) {
 
     // Step B: Read Main Project Sheet and calculate Payment Received & Due Amount from Payment Sheet sum
     var mainData = mainSheet.getDataRange().getValues();
-    var mainHeaders = mainData.shift(); // remove headers
+    mainData.shift(); // remove headers
     var leads = [];
     
     for (var i = 0; i < mainData.length; i++) {
@@ -97,10 +112,13 @@ function doGet(e) {
       var leadIdVal = String(r[0] || "").trim();
       var custNameVal = String(r[15] || "").trim();
       var phoneVal = String(r[16] || "").trim();
-      if (leadIdVal || custNameVal || phoneVal) {
+      var dateVal = formatDate(r[1]);
+
+      // Only include rows that have real lead data (ignore empty formula-padded rows)
+      if (leadIdVal || custNameVal || phoneVal || dateVal) {
         var resolvedId = leadIdVal || ("LD-" + (i + 2));
-        var dealAmt = Number(r[22]) || 0;
-        var sheetPaidAmt = Number(r[37]) || 0;
+        var dealAmt = parseSheetNumber(r[22]);
+        var sheetPaidAmt = parseSheetNumber(r[37]);
         var normLeadKey = resolvedId.toLowerCase();
         var summedPaid = paymentSumByLeadId[normLeadKey] !== undefined
           ? paymentSumByLeadId[normLeadKey]
@@ -109,7 +127,7 @@ function doGet(e) {
 
         leads.push({
           leadId: resolvedId,
-          leadDate: formatDate(r[1]),
+          leadDate: dateVal,
           followUpDate: formatDate(r[2]),
           nextFollowUp: formatDate(r[3]),
           convertedDate: formatDate(r[4]),
@@ -131,7 +149,7 @@ function doGet(e) {
           status: String(r[20] || "New Leads"),
           systemCapacity: String(r[21] || ""),
           dealAmount: dealAmt,
-          quotationAmount: Number(r[23]) || 0,
+          quotationAmount: parseSheetNumber(r[23]),
           paymentType: String(r[24] || ""),
           priceApproval: String(r[25] || ""),
           quotationFileApproved: String(r[26] || ""),
@@ -197,7 +215,7 @@ function doGet(e) {
   }
 }
 
-// 2. POST: Save Lead (into exact next upcoming row), Record Payment in Payment Sheet, Sync Users, List Sheets, or Login
+// 2. POST: Save Lead, Record Payment in Payment Sheet, Sync Users, List Sheets, or Login
 function doPost(e) {
   try {
     var req = JSON.parse(e.postData.contents);
@@ -205,7 +223,7 @@ function doPost(e) {
     var requestedMain = String(req.mainSheetName || req.targetSheet || MAIN_SHEET_NAME).trim();
     var requestedPay = String(req.paymentSheetName || PAYMENT_SHEET_NAME).trim();
 
-    // Action 0: List Available Sheet Tabs in Spreadsheet
+    // Action 0: List Available Sheet Tabs in Spreadsheet (Real tabs only)
     if (req.action === "getSheets") {
       return ContentService.createTextOutput(JSON.stringify({
         status: "success",
@@ -228,7 +246,7 @@ function doPost(e) {
       })).setMimeType(ContentService.MimeType.JSON);
     }
     
-    // Action 2: Save or Update Lead in Selected Main Sheet (Exact Next Upcoming Row, Columns 1..44)
+    // Action 2: Save or Update Lead in Selected Main Sheet
     if (req.action === "saveLead" || (!req.action && (req.leadId || req["LeadID"] || req.lead))) {
       var mainSheet = getOrCreateMainSheet(ss, requestedMain);
       var paySheetForLead = getOrCreatePaymentSheet(ss, requestedPay);
@@ -270,7 +288,7 @@ function doPost(e) {
       })).setMimeType(ContentService.MimeType.JSON);
     }
     
-    // Action 3: Save Payment record in Selected Payment Sheet by LeadID (Exact Next Upcoming Row, Columns 1..7)
+    // Action 3: Save Payment record into Selected Payment Sheet (Linked by LeadID)
     if (req.action === "savePayment") {
       var paySheet = getOrCreatePaymentSheet(ss, requestedPay);
       var mainSheetForPay = getOrCreateMainSheet(ss, req.mainSheetName || MAIN_SHEET_NAME);
@@ -294,6 +312,15 @@ function doPost(e) {
       var usersSheetSync = getOrCreateUsersSheet(ss);
       saveUsersToSheet(usersSheetSync, req.users);
       return ContentService.createTextOutput(JSON.stringify({ status: "success", count: req.users.length }))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
+
+    // Action 4B: Save single user
+    if (req.action === "saveUser" && req.user) {
+      var usersSheetSingle = getOrCreateUsersSheet(ss);
+      var allUsers = req.users || [req.user];
+      saveUsersToSheet(usersSheetSingle, allUsers);
+      return ContentService.createTextOutput(JSON.stringify({ status: "success", user: req.user.email }))
         .setMimeType(ContentService.MimeType.JSON);
     }
     
@@ -346,34 +373,44 @@ function doPost(e) {
   }
 }
 
-// Writes Lead strictly into Columns 1..44 (Col A..AR) at either the matching LeadID row
-// OR the exact next upcoming empty row (ignoring empty rows that only have FALSE checkboxes/formulas)
+// Writes Lead into the EXACT NEXT ROW right after the previous entry (AppSheet style),
+// preserving formula cells so Google Sheets processes formulas automatically.
 function saveSingleLead(sheet, l, updatedBy) {
-  var lastRow = Math.max(sheet.getLastRow(), 1);
-  var numCols = Math.max(sheet.getLastColumn(), 44);
-  var data = sheet.getRange(1, 1, lastRow, numCols).getValues();
   var leadIdStr = String(l.leadId || l["LeadID"] || "").trim();
+  var maxScanRows = Math.max(sheet.getLastRow(), 1);
+  var numCols = Math.max(sheet.getLastColumn(), 44);
 
+  // Scan rows to find existing LeadID or detect the last real data row
+  var scanData = sheet.getRange(1, 1, maxScanRows, Math.min(numCols, 25)).getValues();
   var existingRowIdx = -1;
-  var firstUpcomingEmptyRowIdx = -1;
+  var lastRealDataRowIdx = 1; // Header row 1
 
-  for (var i = 1; i < data.length; i++) {
-    var rowLeadId = String(data[i][0] || "").trim();
-    var rowCustomer = String(data[i][15] || "").trim();
-    var rowPhone = String(data[i][16] || "").trim();
+  for (var i = 1; i < scanData.length; i++) {
+    var rowLeadId = String(scanData[i][0] || "").trim();
+    var rowDate = scanData[i][1] ? String(scanData[i][1]).trim() : "";
+    var rowCustomer = scanData[i][15] !== undefined ? String(scanData[i][15]).trim() : "";
+    var rowPhone = scanData[i][16] !== undefined ? String(scanData[i][16]).trim() : "";
 
-    if (leadIdStr && rowLeadId === leadIdStr) {
+    // Match existing lead
+    if (leadIdStr && rowLeadId && rowLeadId.toLowerCase() === leadIdStr.toLowerCase()) {
       existingRowIdx = i + 1;
       break;
     }
 
-    // A row is truly empty if LeadID (Col A), Customer Name (Col P), and Phone No (Col Q) are all blank,
-    // even if Columns 36/37 have unchecked FALSE checkboxes or Col 39 has a formula.
-    if (firstUpcomingEmptyRowIdx === -1 && rowLeadId === "" && rowCustomer === "" && rowPhone === "") {
-      firstUpcomingEmptyRowIdx = i + 1;
+    // A row is considered a real data entry if it has LeadID, Date, Customer Name, or Phone
+    if (rowLeadId !== "" || rowCustomer !== "" || rowPhone !== "" || rowDate !== "") {
+      lastRealDataRowIdx = i + 1;
     }
   }
-  
+
+  // If editing an existing lead, use that row.
+  // If adding a new lead, insert into the exact row right after the last entry (NOT bottom of sheet)!
+  var targetRow = existingRowIdx > 0 ? existingRowIdx : (lastRealDataRowIdx + 1);
+
+  // Check existing formulas in targetRow (Columns 1..44)
+  var targetRange = sheet.getRange(targetRow, 1, 1, 44);
+  var targetFormulas = targetRange.getFormulas()[0];
+
   var rowData = [
     leadIdStr,
     l.leadDate || l["Lead Date"] || "",
@@ -397,8 +434,8 @@ function saveSingleLead(sheet, l, updatedBy) {
     l.salesPerson || l["Sales Person"] || "",
     l.status || l["Current Status"] || "New Leads",
     l.systemCapacity || l["System Capacity"] || "",
-    Number(l.dealAmount || l["Deal Amount"]) || 0,
-    Number(l.quotationAmount || l["Quotation Amount"]) || 0,
+    parseSheetNumber(l.dealAmount || l["Deal Amount"]),
+    parseSheetNumber(l.quotationAmount || l["Quotation Amount"]),
     l.paymentType || l["Type"] || "",
     l.priceApproval || l["Price Approval"] || "",
     l.quotationFileApproved || l["Quoattion File"] || "",
@@ -412,51 +449,74 @@ function saveSingleLead(sheet, l, updatedBy) {
     l.structure || l["Structure"] || "",
     (l.netMeterDone === true || String(l.netMeterDone).toUpperCase() === "TRUE") ? "TRUE" : "FALSE",
     (l.subsidyDone === true || String(l.subsidyDone).toUpperCase() === "TRUE") ? "TRUE" : "FALSE",
-    Number(l.paymentReceived || l["Payment Received"]) || 0,
-    Number(l.duePayment || l["Due Amount"]) || 0,
+    parseSheetNumber(l.paymentReceived || l["Payment Received"]),
+    parseSheetNumber(l.duePayment || l["Due Amount"]),
     l.notes || l["Remark"] || "",
     l.quotationFile || l["Quotation File"] || "",
     updatedBy || l.lastModifiedBy || l["Last Modified By"] || "",
     Utilities.formatDate(new Date(), "GMT+5:30", "M/d/yyyy HH:mm:ss"),
     l.firstPaymentMonth || l["First Payment Month"] || ""
   ];
-  
-  var targetRow = existingRowIdx > 0
-    ? existingRowIdx
-    : (firstUpcomingEmptyRowIdx > 0 ? firstUpcomingEmptyRowIdx : data.length + 1);
 
-  // Always write starting at Column 1 (Column A) across 44 columns
-  sheet.getRange(targetRow, 1, 1, 44).setValues([rowData]);
+  // Preserves existing formulas in targetRow OR auto-copies formula from row above if new row (AppSheet behavior)
+  for (var c = 0; c < 44; c++) {
+    if (targetFormulas && targetFormulas[c] && String(targetFormulas[c]).trim().indexOf("=") === 0) {
+      // Cell already has a formula in the sheet — do not overwrite with static value
+      rowData[c] = targetFormulas[c];
+    } else if (existingRowIdx === -1 && targetRow > 2) {
+      // If new row and cell has no formula, check if row above has a formula to auto-fill
+      var aboveFormula = sheet.getRange(targetRow - 1, c + 1).getFormula();
+      if (aboveFormula && aboveFormula.indexOf("=") === 0) {
+        sheet.getRange(targetRow - 1, c + 1).copyTo(sheet.getRange(targetRow, c + 1), SpreadsheetApp.CopyPasteType.PASTE_FORMULA, false);
+        rowData[c] = sheet.getRange(targetRow, c + 1).getFormula();
+      }
+    }
+  }
+
+  targetRange.setValues([rowData]);
   return targetRow;
 }
 
+// Writes Payment into the EXACT NEXT ROW right after the previous payment entry (AppSheet style),
+// preserving formula cells and letting Google Sheets calculate formulas automatically.
 function saveSinglePaymentToSheet(paySheet, p) {
   var leadIdStr = String(p.leadId || p["LeadID"] || "").trim();
   var payDateStr = String(p.paymentDate || p["Payment Date"] || "");
   var payTypeStr = String(p.paymentType || p["Payment Type"] || "UPI");
-  var payAmt = Number(p.amount || p["Amount"]) || 0;
+  var payAmt = parseSheetNumber(p.amount || p["Amount"]);
   var txnIdStr = String(p.transactionId || p["Transaction ID"] || "").trim();
   var receiptStr = String(p.receiptImage || p["Receipt Image"] || "");
   var remarkStr = String(p.remark || p["Remark"] || "");
 
-  var lastRow = Math.max(paySheet.getLastRow(), 1);
-  var data = paySheet.getRange(1, 1, lastRow, 7).getValues();
+  var maxScanRows = Math.max(paySheet.getLastRow(), 1);
+  var scanData = paySheet.getRange(1, 1, maxScanRows, Math.min(paySheet.getLastColumn() || 7, 7)).getValues();
+  
   var existingRowIdx = -1;
-  var firstEmptyRowIdx = -1;
+  var lastRealPaymentRowIdx = 1; // Header row 1
 
-  for (var i = 1; i < data.length; i++) {
-    var rowLeadId = String(data[i][0] || "").trim();
-    var rowAmt = String(data[i][3] || "").trim();
-    var rowTxn = String(data[i][4] || "").trim();
+  for (var i = 1; i < scanData.length; i++) {
+    var rowLeadId = String(scanData[i][0] || "").trim();
+    var rowDate = scanData[i][1] ? String(scanData[i][1]).trim() : "";
+    var rowAmt = parseSheetNumber(scanData[i][3]);
+    var rowTxn = String(scanData[i][4] || "").trim();
 
+    // Check if updating an existing payment record
     if (leadIdStr && txnIdStr && rowLeadId.toLowerCase() === leadIdStr.toLowerCase() && rowTxn.toLowerCase() === txnIdStr.toLowerCase()) {
       existingRowIdx = i + 1;
       break;
     }
-    if (firstEmptyRowIdx === -1 && rowLeadId === "" && (rowAmt === "" || rowAmt === "0")) {
-      firstEmptyRowIdx = i + 1;
+
+    // A row is considered a real payment entry if it has LeadID, Date, Amount > 0, or Transaction ID
+    if (rowLeadId !== "" || rowDate !== "" || rowAmt > 0 || rowTxn !== "") {
+      lastRealPaymentRowIdx = i + 1;
     }
   }
+
+  // Next row immediately after previous payment entry
+  var targetRow = existingRowIdx > 0 ? existingRowIdx : (lastRealPaymentRowIdx + 1);
+
+  var targetRange = paySheet.getRange(targetRow, 1, 1, 7);
+  var targetFormulas = targetRange.getFormulas()[0];
 
   var payRowData = [
     leadIdStr,
@@ -468,11 +528,20 @@ function saveSinglePaymentToSheet(paySheet, p) {
     remarkStr
   ];
 
-  var targetRow = existingRowIdx > 0
-    ? existingRowIdx
-    : (firstEmptyRowIdx > 0 ? firstEmptyRowIdx : data.length + 1);
+  // Preserves existing formulas in targetRow OR auto-copies formula from row above
+  for (var c = 0; c < 7; c++) {
+    if (targetFormulas && targetFormulas[c] && String(targetFormulas[c]).trim().indexOf("=") === 0) {
+      payRowData[c] = targetFormulas[c];
+    } else if (existingRowIdx === -1 && targetRow > 2) {
+      var prevCellFormula = paySheet.getRange(targetRow - 1, c + 1).getFormula();
+      if (prevCellFormula && prevCellFormula.indexOf("=") === 0) {
+        paySheet.getRange(targetRow - 1, c + 1).copyTo(paySheet.getRange(targetRow, c + 1), SpreadsheetApp.CopyPasteType.PASTE_FORMULA, false);
+        payRowData[c] = paySheet.getRange(targetRow, c + 1).getFormula();
+      }
+    }
+  }
 
-  paySheet.getRange(targetRow, 1, 1, 7).setValues([payRowData]);
+  targetRange.setValues([payRowData]);
   return targetRow;
 }
 
@@ -529,7 +598,7 @@ function updateLeadPaymentTotals(mainSheet, paySheet, leadId) {
 
   for (var k = 1; k < payData.length; k++) {
     if (String(payData[k][0] || "").trim().toLowerCase() === normTargetId) {
-      totalForLead += Number(payData[k][3]) || 0;
+      totalForLead += parseSheetNumber(payData[k][3]);
       matchCount++;
     }
   }
@@ -540,10 +609,20 @@ function updateLeadPaymentTotals(mainSheet, paySheet, leadId) {
   for (var i = 1; i < data.length; i++) {
     if (String(data[i][0] || "").trim().toLowerCase() === normTargetId) {
       var row = i + 1;
-      var deal = Number(data[i][22]) || 0;
+      var deal = parseSheetNumber(data[i][22]);
       var newDue = Math.max(0, deal - totalForLead);
-      mainSheet.getRange(row, 38).setValue(totalForLead); // Col 38: Payment Received (summed from Payment Sheet)
-      mainSheet.getRange(row, 39).setValue(newDue);       // Col 39: Due Amount
+
+      // Check if Col 38 or Col 39 already have formulas in Google Sheet
+      var col38Formula = mainSheet.getRange(row, 38).getFormula();
+      var col39Formula = mainSheet.getRange(row, 39).getFormula();
+
+      // Only set static values if there are NO formulas, preserving user's formula processing
+      if (!col38Formula || col38Formula.indexOf("=") !== 0) {
+        mainSheet.getRange(row, 38).setValue(totalForLead); // Col 38: Payment Received
+      }
+      if (!col39Formula || col39Formula.indexOf("=") !== 0) {
+        mainSheet.getRange(row, 39).setValue(newDue);       // Col 39: Due Amount
+      }
       break;
     }
   }
@@ -636,10 +715,11 @@ export const GoogleSheetSyncModal: React.FC<GoogleSheetSyncModalProps> = ({
   const [webAppUrl, setWebAppUrl] = useState(syncConfig.webAppUrl || '');
   const [mainSheetName, setMainSheetName] = useState(syncConfig.mainSheetName || 'Main Project Sheet');
   const [paymentSheetName, setPaymentSheetName] = useState(syncConfig.paymentSheetName || 'Payment Sheet');
+  // STRICT: Only hold real sheet tabs detected from the connected Google Spreadsheet
   const [detectedSheets, setDetectedSheets] = useState<string[]>(
-    syncConfig.availableSheets && syncConfig.availableSheets.length > 0
-      ? syncConfig.availableSheets
-      : ['Main Project Sheet', 'Payment Sheet', 'Main Data', 'Payment Data', 'Payment Details', 'Leads', 'Payments', 'Sheet1', 'Users']
+    Array.isArray(syncConfig.availableSheets)
+      ? syncConfig.availableSheets.filter((s) => typeof s === 'string' && s.trim().length > 0 && s.toLowerCase() !== 'users')
+      : []
   );
   const [customSheetInput, setCustomSheetInput] = useState('');
   const [isFetchingSheets, setIsFetchingSheets] = useState(false);
@@ -651,17 +731,9 @@ export const GoogleSheetSyncModal: React.FC<GoogleSheetSyncModalProps> = ({
       setWebAppUrl(syncConfig.webAppUrl || '');
       setMainSheetName(syncConfig.mainSheetName || 'Main Project Sheet');
       setPaymentSheetName(syncConfig.paymentSheetName || 'Payment Sheet');
-      if (syncConfig.availableSheets && syncConfig.availableSheets.length > 0) {
-        setDetectedSheets((prev) =>
-          Array.from(
-            new Set([
-              ...syncConfig.availableSheets!,
-              syncConfig.mainSheetName || 'Main Project Sheet',
-              syncConfig.paymentSheetName || 'Payment Sheet',
-              ...prev,
-            ])
-          )
-        );
+      if (Array.isArray(syncConfig.availableSheets)) {
+        const real = syncConfig.availableSheets.filter((s) => typeof s === 'string' && s.trim().length > 0 && s.toLowerCase() !== 'users');
+        setDetectedSheets(real);
       }
     }
   }, [isOpen, syncConfig.webAppUrl, syncConfig.mainSheetName, syncConfig.paymentSheetName, syncConfig.availableSheets]);
@@ -673,25 +745,10 @@ export const GoogleSheetSyncModal: React.FC<GoogleSheetSyncModalProps> = ({
     paymentSheetName.trim() || 'Payment Sheet'
   );
 
-  // Combined list of all sheet options for dropdown selection
-  const allSheetOptions = Array.from(
-    new Set([
-      mainSheetName.trim() || 'Main Project Sheet',
-      paymentSheetName.trim() || 'Payment Sheet',
-      ...(syncConfig.availableSheets || []),
-      ...detectedSheets,
-      'Main Project Sheet',
-      'Payment Sheet',
-      'Main Data',
-      'Main Sheet',
-      'Payment Data',
-      'Payment Details',
-      'Payments',
-      'Leads',
-      'Sheet1',
-      'Sheet2',
-    ].filter(Boolean))
-  );
+  // Combined list of sheet options strictly derived from real detected tabs in Google Sheet
+  const allSheetOptions = detectedSheets.length > 0
+    ? detectedSheets
+    : Array.from(new Set([mainSheetName.trim(), paymentSheetName.trim()].filter(Boolean)));
 
   const handleCopyCode = () => {
     navigator.clipboard.writeText(generatedAppsScriptCode);
@@ -724,33 +781,37 @@ export const GoogleSheetSyncModal: React.FC<GoogleSheetSyncModalProps> = ({
           : Array.isArray(json.sheets)
           ? json.sheets
           : [];
-        const resolvedMain = json.mainSheetName || mainSheetName.trim() || 'Main Project Sheet';
-        const resolvedPay = json.paymentSheetName || paymentSheetName.trim() || 'Payment Sheet';
-        const mergedTabs = Array.from(
-          new Set([
-            ...incomingTabs,
-            resolvedMain,
-            resolvedPay,
-            ...detectedSheets,
-          ].filter(Boolean))
-        );
-        setDetectedSheets(mergedTabs);
-        onSaveSyncConfig({
-          ...syncConfig,
-          webAppUrl: targetUrl,
-          mainSheetName: mainSheetName.trim() || resolvedMain,
-          paymentSheetName: paymentSheetName.trim() || resolvedPay,
-          availableSheets: mergedTabs,
-          autoSync: true,
-        });
+
         if (incomingTabs.length > 0) {
-          setStatusMessage(`Detected ${incomingTabs.length} sheet tab(s) from attached Google Spreadsheet: ${incomingTabs.join(', ')}`);
+          // Filter out internal system sheets like Users if desired, keep all actual user sheets
+          const realTabs = incomingTabs.filter(s => s && s.toLowerCase() !== 'users');
+          setDetectedSheets(realTabs);
+
+          const resolvedMain = realTabs.includes(mainSheetName)
+            ? mainSheetName
+            : (json.mainSheetName && realTabs.includes(json.mainSheetName) ? json.mainSheetName : realTabs[0]);
+          const resolvedPay = realTabs.includes(paymentSheetName)
+            ? paymentSheetName
+            : (json.paymentSheetName && realTabs.includes(json.paymentSheetName) ? json.paymentSheetName : (realTabs.length > 1 ? realTabs[1] : realTabs[0]));
+
+          setMainSheetName(resolvedMain);
+          setPaymentSheetName(resolvedPay);
+
+          onSaveSyncConfig({
+            ...syncConfig,
+            webAppUrl: targetUrl,
+            mainSheetName: resolvedMain,
+            paymentSheetName: resolvedPay,
+            availableSheets: realTabs,
+            autoSync: true,
+          });
+          setStatusMessage(`Live Google Spreadsheet tabs detected (${realTabs.length}): ${realTabs.join(', ')}`);
         } else {
-          setStatusMessage(`Connected to Google Sheet! Active Main Sheet: "${mainSheetName}" | Active Payment Sheet: "${paymentSheetName}".`);
+          setStatusMessage(`Connected! Main Sheet: "${mainSheetName}" | Payment Sheet: "${paymentSheetName}".`);
         }
       }
     } catch {
-      setStatusMessage('Saved sheet configuration. Select your Main Sheet and Payment Sheet tabs below.');
+      setStatusMessage('Saved configuration. Select your Main Sheet and Payment Sheet below.');
     } finally {
       setIsFetchingSheets(false);
     }
@@ -1097,56 +1158,104 @@ export const GoogleSheetSyncModal: React.FC<GoogleSheetSyncModalProps> = ({
                 </button>
               </div>
 
-              {/* Add custom tab name or click detected tabs */}
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 bg-white p-2.5 rounded-xl border border-slate-200">
-                <div className="flex flex-wrap items-center gap-1.5">
-                  <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mr-1">
-                    Available Sheet Tabs:
+              {/* Real Available Sheet Tabs from Google Spreadsheet */}
+              <div className="bg-white p-3 rounded-xl border border-slate-200 space-y-2">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                    Live Tabs from Attached Spreadsheet ({detectedSheets.length}):
                   </span>
-                  {allSheetOptions.slice(0, 8).map((tabName) => {
-                    const isMain = tabName === mainSheetName;
-                    const isPay = tabName === paymentSheetName;
-                    return (
-                      <span
-                        key={tabName}
-                        className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-medium border ${
-                          isMain
-                            ? 'bg-indigo-100 text-indigo-900 border-indigo-300 font-bold'
-                            : isPay
-                            ? 'bg-emerald-100 text-emerald-900 border-emerald-300 font-bold'
-                            : 'bg-slate-100 text-slate-700 border-slate-200'
-                        }`}
-                      >
-                        <span>{tabName}</span>
-                        {isMain && <span className="text-[9px] bg-indigo-600 text-white px-1 rounded">MAIN</span>}
-                        {isPay && <span className="text-[9px] bg-emerald-600 text-white px-1 rounded">PAYMENT</span>}
-                      </span>
-                    );
-                  })}
+
+                  <div className="flex items-center gap-1.5">
+                    <input
+                      type="text"
+                      placeholder="Add custom tab name..."
+                      value={customSheetInput}
+                      onChange={(e) => setCustomSheetInput(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          handleAddCustomSheetTab();
+                        }
+                      }}
+                      className="px-2.5 py-1 text-[11px] bg-slate-50 border border-slate-300 rounded-lg w-40 focus:outline-none focus:border-indigo-500 font-mono"
+                    />
+                    <button
+                      type="button"
+                      onClick={handleAddCustomSheetTab}
+                      className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-white text-[11px] font-medium rounded-lg cursor-pointer"
+                    >
+                      + Add Tab
+                    </button>
+                  </div>
                 </div>
 
-                <div className="flex items-center gap-1.5 shrink-0">
-                  <input
-                    type="text"
-                    placeholder="Add custom tab name..."
-                    value={customSheetInput}
-                    onChange={(e) => setCustomSheetInput(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') {
-                        e.preventDefault();
-                        handleAddCustomSheetTab();
-                      }
-                    }}
-                    className="px-2.5 py-1 text-[11px] bg-slate-50 border border-slate-300 rounded-lg w-36 focus:outline-none focus:border-indigo-500"
-                  />
-                  <button
-                    type="button"
-                    onClick={handleAddCustomSheetTab}
-                    className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-white text-[11px] font-medium rounded-lg cursor-pointer"
-                  >
-                    + Add Tab
-                  </button>
-                </div>
+                {detectedSheets.length === 0 ? (
+                  <div className="p-2.5 bg-amber-50/80 border border-amber-200 rounded-lg text-amber-900 text-xs flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <span className="w-2 h-2 rounded-full bg-amber-500" />
+                      <span>Google Sheet ke real tabs dekhne ke liye upar URL enter karke <strong>"Detect Tabs from Sheet"</strong> par click karein.</span>
+                    </div>
+                    <button
+                      type="button"
+                      disabled={isFetchingSheets}
+                      onClick={() => handleFetchSheetsFromUrl()}
+                      className="px-2 py-0.5 bg-amber-600 hover:bg-amber-700 text-white font-semibold rounded text-[11px] cursor-pointer shrink-0"
+                    >
+                      {isFetchingSheets ? 'Detecting...' : 'Detect Tabs'}
+                    </button>
+                  </div>
+                ) : (
+                  <div className="flex flex-wrap items-center gap-2 pt-1">
+                    {detectedSheets.map((tabName) => {
+                      const isMain = tabName === mainSheetName;
+                      const isPay = tabName === paymentSheetName;
+                      return (
+                        <div
+                          key={tabName}
+                          className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs border transition-all ${
+                            isMain
+                              ? 'bg-indigo-50 border-indigo-300 text-indigo-950 font-bold shadow-2xs'
+                              : isPay
+                              ? 'bg-emerald-50 border-emerald-300 text-emerald-950 font-bold shadow-2xs'
+                              : 'bg-slate-50 border-slate-200 text-slate-700'
+                          }`}
+                        >
+                          <span className="font-mono">{tabName}</span>
+                          {isMain && (
+                            <span className="text-[9px] bg-indigo-600 text-white px-1.5 py-0.2 rounded font-bold">
+                              MAIN
+                            </span>
+                          )}
+                          {isPay && (
+                            <span className="text-[9px] bg-emerald-600 text-white px-1.5 py-0.2 rounded font-bold">
+                              PAYMENT
+                            </span>
+                          )}
+                          {!isMain && (
+                            <button
+                              type="button"
+                              onClick={() => handleSelectMainSheet(tabName)}
+                              title="Set as Main Project Sheet"
+                              className="text-[10px] text-indigo-600 hover:text-indigo-800 hover:underline cursor-pointer ml-1"
+                            >
+                              [Use for Main]
+                            </button>
+                          )}
+                          {!isPay && (
+                            <button
+                              type="button"
+                              onClick={() => handleSelectPaymentSheet(tabName)}
+                              title="Set as Payment Sheet"
+                              className="text-[10px] text-emerald-600 hover:text-emerald-800 hover:underline cursor-pointer ml-0.5"
+                            >
+                              [Use for Pay]
+                            </button>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
